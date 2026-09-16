@@ -1,26 +1,84 @@
 import { useState } from 'react';
-import { useFetch } from '@/hooks/useFetch';
-import { sdk } from '@/services/sdk';
 import ApperIcon from '@/components/ApperIcon';
+import { useLocalQuery } from '@/hooks/useLocalTable';
+import { insert, remove, update } from '@/services/localDb';
 
-export const route = { path: '/places', layout: 'owner', access: 'authenticated' };
-export const nav = { icon: 'MapPin', label: 'Places', section: 'Shift', order: 4 };
-const TYPES=['Restaurant','Hub','Dark Store'];
-const PLACE_FIELDS=['Name','type_c','address_c','latitude_c','longitude_c','platform_c','notes_c'];
-const PLATFORM_FIELDS=['Name','name_c','category_c','active_c','notes_c'];
-export default function Places(){
- const [tab,setTab]=useState('Places');const [search,setSearch]=useState('');const [formOpen,setFormOpen]=useState(false);const [editing,setEditing]=useState(null);const [form,setForm]=useState({Name:'',type_c:'Restaurant',address_c:'',latitude_c:'',longitude_c:'',platform_c:'',notes_c:''});const [saving,setSaving]=useState(false);const [message,setMessage]=useState('');
- const {data:places,loading:pl, error:pe,run:rp}=useFetch(async()=>{const r=await sdk.table('places_c').select(PLACE_FIELDS).orderBy('Name').page(1,200).fetch();if(!r.success)throw new Error(r.message);return r.data??[];},[]);
- const {data:platforms,loading:fl,error:fe,run:rf}=useFetch(async()=>{const r=await sdk.table('platforms_c').select(PLATFORM_FIELDS).orderBy('Name').page(1,100).fetch();if(!r.success)throw new Error(r.message);return r.data??[];},[]);
- const list=(tab==='Places'?(places??[]):(platforms??[])).filter(x=>`${x.Name} ${x.address_c||''} ${x.type_c||''}`.toLowerCase().includes(search.toLowerCase()));
- function startCreate(){setEditing(null);setForm(tab==='Places'?{Name:'',type_c:'Restaurant',address_c:'',latitude_c:'',longitude_c:'',platform_c:'',notes_c:''}:{Name:'',name_c:'',category_c:'Food',active_c:true,notes_c:''});setFormOpen(true);}
- function startEdit(r){setEditing(r);setForm(tab==='Places'?{Name:r.Name,type_c:r.type_c,address_c:r.address_c||'',latitude_c:r.latitude_c??'',longitude_c:r.longitude_c??'',platform_c:r.platform_c?.Id||'',notes_c:r.notes_c||''}:{Name:r.Name,name_c:r.name_c||r.Name,category_c:r.category_c||'Other',active_c:r.active_c,notes_c:r.notes_c||''});setFormOpen(true);}
- async function submit(e){e.preventDefault();setSaving(true);setMessage('');try{let payload;if(tab==='Places'){payload={Name:form.Name,type_c:form.type_c,address_c:form.address_c,latitude_c:form.latitude_c===''?null:Number(form.latitude_c),longitude_c:form.longitude_c===''?null:Number(form.longitude_c),platform_c:form.platform_c||null,notes_c:form.notes_c};}else{payload={Name:form.Name,name_c:form.Name,category_c:form.category_c,active_c:form.active_c,notes_c:form.notes_c};}const r=editing?await sdk.table(tab==='Places'?'places_c':'platforms_c').update({Id:editing.Id,...payload}):await sdk.table(tab==='Places'?'places_c':'platforms_c').create(payload);if(!r.success)throw new Error(r.messages?.[0]||r.message||'Save failed');setFormOpen(false);setMessage(editing?'Changes saved.':'Added successfully.');await Promise.all([rp(),rf()]);}catch(e){setMessage(e.message);}finally{setSaving(false);}}
- async function remove(r){if(!window.confirm(`Delete ${r.Name}?`))return;const res=await sdk.table(tab==='Places'?'places_c':'platforms_c').remove(r.Id);if(!res.success)setMessage(res.messages?.[0]||res.message||'Delete failed');else{setMessage(`${r.Name} deleted.`);await Promise.all([rp(),rf()]);}}
- return <div className="space-y-6"><header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Your local network</p><h1 className="font-heading text-5xl font-bold">Places & platforms</h1><p className="mt-2 text-muted-foreground">Keep recurring pickup locations and delivery partners at hand.</p></div><button onClick={startCreate} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Plus"/> Add {tab==='Places'?'place':'platform'}</button></header>
- <div className="flex flex-wrap items-center gap-2"><div className="flex rounded-xl bg-muted p-1">{['Places','Platforms'].map(t=><button key={t} onClick={()=>{setTab(t);setFormOpen(false);}} className={`rounded-lg px-4 py-2 text-sm font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab===t?'bg-card text-foreground shadow-sm':'text-muted-foreground hover:text-foreground'}`}>{t}</button>)}</div><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search saved locations" className="min-w-48 flex-1 rounded-xl border border-input bg-card px-4 py-3"/></div>
- {message&&<div role="status" className="rounded-xl bg-muted p-3 text-sm">{message}</div>}
- {formOpen&&<form onSubmit={submit} className="grid gap-3 rounded-3xl border border-border bg-card p-5 md:grid-cols-2"><h2 className="md:col-span-2 font-heading text-2xl font-bold">{editing?'Edit':'Add'} {tab==='Places'?'place':'platform'}</h2><input required placeholder="Name" value={form.Name} onChange={e=>setForm({...form,Name:e.target.value})} className="rounded-xl border border-input bg-background px-3 py-3"/>{tab==='Places'?<><select value={form.type_c} onChange={e=>setForm({...form,type_c:e.target.value})} className="rounded-xl border border-input bg-background px-3 py-3">{TYPES.map(t=><option key={t}>{t}</option>)}</select><input placeholder="Address" value={form.address_c} onChange={e=>setForm({...form,address_c:e.target.value})} className="rounded-xl border border-input bg-background px-3 py-3 md:col-span-2"/><select value={form.platform_c} onChange={e=>setForm({...form,platform_c:e.target.value})} className="rounded-xl border border-input bg-background px-3 py-3"><option value="">No linked platform</option>{(platforms??[]).map(p=><option key={p.Id} value={p.Id}>{p.Name}</option>)}</select><input type="number" step="any" placeholder="Latitude" value={form.latitude_c} onChange={e=>setForm({...form,latitude_c:e.target.value})} className="rounded-xl border border-input bg-background px-3 py-3"/><input type="number" step="any" placeholder="Longitude" value={form.longitude_c} onChange={e=>setForm({...form,longitude_c:e.target.value})} className="rounded-xl border border-input bg-background px-3 py-3"/></>:<><select value={form.category_c} onChange={e=>setForm({...form,category_c:e.target.value})} className="rounded-xl border border-input bg-background px-3 py-3">{['Food','Hyperlocal','Parcel','Other'].map(x=><option key={x}>{x}</option>)}</select><label className="flex items-center gap-2"><input type="checkbox" checked={!!form.active_c} onChange={e=>setForm({...form,active_c:e.target.checked})}/> Active platform</label></>}<textarea placeholder="Notes" value={form.notes_c} onChange={e=>setForm({...form,notes_c:e.target.value})} className="rounded-xl border border-input bg-background px-3 py-3 md:col-span-2"/><div className="flex gap-2 md:col-span-2"><button disabled={saving} className="rounded-xl bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{saving?'Saving…':'Save'}</button><button type="button" onClick={()=>setFormOpen(false)} className="rounded-xl bg-muted px-5 py-3 font-bold">Cancel</button></div></form>}
- {(tab==='Places'?pl||!!pe:fl||!!fe)?<div className="grid gap-3 md:grid-cols-2">{[1,2,3,4].map(i=><div key={i} className="h-32 animate-pulse rounded-2xl bg-muted"/>)}</div>:(tab==='Places'?pe:fe)?<div className="rounded-xl bg-destructive/10 p-4 text-destructive">{(tab==='Places'?pe:fe).message}<button onClick={()=>tab==='Places'?rp():rf()} className="ml-3 underline">Retry</button></div>:list.length===0?<div className="rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="MapPin" className="mx-auto mb-3 text-muted-foreground"/><p className="text-muted-foreground">Nothing here yet. Add a place or platform to build your network.</p></div>:<div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{list.map(r=><article key={r.Id} className="rounded-3xl border border-border bg-card p-5"><div className="mb-4 flex items-start justify-between"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-secondary text-secondary-foreground"><ApperIcon name={tab==='Places'?(r.type_c==='Hub'?'Warehouse':r.type_c==='Dark Store'?'Store':'Utensils'):'Layers'}/></span><div className="flex gap-1"><button aria-label={`Edit ${r.Name}`} onClick={()=>startEdit(r)} className="rounded-lg p-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Pencil"/></button><button aria-label={`Delete ${r.Name}`} onClick={()=>remove(r)} className="rounded-lg p-2 text-destructive hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Trash2"/></button></div></div><h2 className="font-heading text-2xl font-bold">{r.Name}</h2><span className="mt-1 inline-flex rounded-full bg-secondary px-2.5 py-1 text-xs font-bold text-secondary-foreground">{tab==='Places'?r.type_c:r.category_c}</span>{tab==='Places'?<><p className="mt-3 text-sm text-muted-foreground">{r.address_c||'No address saved'}</p><p className="mt-2 text-xs text-muted-foreground">{r.latitude_c!=null&&r.longitude_c!=null?`${r.latitude_c}, ${r.longitude_c}`:'Coordinates not set'} {r.platform_c?`· ${r.platform_c.Name}`:''}</p></>:<p className="mt-3 text-sm text-muted-foreground">{r.active_c?'Active':'Paused'} · {r.notes_c||'No notes'}</p>}</article>)}</div>}
- </div>;
+export const route = { path: '/places', layout: 'owner', access: 'public' };
+export const nav = { icon: 'MapPin', label: 'Places', section: 'Operations', order: 4 };
+
+const PLACE_TYPES = ['Restaurant', 'Hub', 'Dark Store'];
+const PLATFORM_CATEGORIES = ['Food', 'Hyperlocal', 'Parcel', 'Other'];
+
+export default function Places() {
+  const [tab, setTab] = useState('places');
+  const [search, setSearch] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [form, setForm] = useState(emptyPlace());
+  const { data: places, loading: placesLoading, error: placesError, run: reloadPlaces } = useLocalQuery('SELECT * FROM places ORDER BY name', [], []);
+  const { data: platforms, loading: platformsLoading, error: platformsError, run: reloadPlatforms } = useLocalQuery('SELECT * FROM platforms ORDER BY name', [], []);
+
+  const source = tab === 'places' ? places : platforms;
+  const rows = (source ?? []).filter(row => `${row.name} ${row.address ?? ''} ${row.type ?? ''} ${row.category ?? ''}`.toLowerCase().includes(search.toLowerCase()));
+
+  function startCreate() {
+    setEditing(null);
+    setForm(tab === 'places' ? emptyPlace() : emptyPlatform());
+    setOpen(true);
+  }
+
+  function startEdit(row) {
+    setEditing(row);
+    setForm(tab === 'places'
+      ? { name: row.name, type: row.type, address: row.address ?? '', latitude: row.latitude ?? '', longitude: row.longitude ?? '', platform_id: row.platform_id ?? '', notes: row.notes ?? '' }
+      : { name: row.name, category: row.category ?? 'Other', active: Boolean(row.active), notes: row.notes ?? '' });
+    setOpen(true);
+  }
+
+  async function saveRecord(event) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage('');
+    try {
+      if (tab === 'places') {
+        const values = { name: form.name.trim(), type: form.type, address: form.address.trim(), latitude: form.latitude === '' ? null : Number(form.latitude), longitude: form.longitude === '' ? null : Number(form.longitude), platform_id: form.platform_id || null, notes: form.notes.trim() };
+        if (editing) await update('places', editing.id, values); else await insert('places', values, 'place');
+      } else {
+        const values = { name: form.name.trim(), category: form.category, active: form.active ? 1 : 0, notes: form.notes.trim() };
+        if (editing) await update('platforms', editing.id, values); else await insert('platforms', values, 'platform');
+      }
+      setOpen(false);
+      setMessage(editing ? 'Changes saved locally.' : `${tab === 'places' ? 'Place' : 'Platform'} added.`);
+      await Promise.all([reloadPlaces(), reloadPlatforms()]);
+    } catch (err) {
+      setMessage(err.message || 'Could not save the record.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteRecord(row) {
+    if (!window.confirm(`Delete ${row.name}?`)) return;
+    await remove(tab, row.id);
+    setMessage(`${row.name} deleted.`);
+    await Promise.all([reloadPlaces(), reloadPlatforms()]);
+  }
+
+  const loading = tab === 'places' ? placesLoading : platformsLoading;
+  const error = tab === 'places' ? placesError : platformsError;
+
+  return <div className="space-y-6">
+    <header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Your delivery network</p><h1 className="font-heading text-5xl font-bold">Places & platforms</h1><p className="mt-2 text-muted-foreground">Maintain the locations and delivery channels you use repeatedly.</p></div><button onClick={startCreate} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Plus" /> Add {tab === 'places' ? 'place' : 'platform'}</button></header>
+    <div className="flex flex-wrap gap-3 rounded-2xl border border-border bg-card p-3"><div className="flex rounded-xl bg-muted p-1">{[['places', 'Places'], ['platforms', 'Platforms']].map(([value, label]) => <button key={value} onClick={() => { setTab(value); setOpen(false); }} className={`rounded-lg px-4 py-2 text-sm font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === value ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{label}</button>)}</div><label className="flex min-w-56 flex-1 items-center gap-2 rounded-xl bg-muted px-3"><ApperIcon name="Search" className="text-muted-foreground" /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search your network" className="w-full bg-transparent py-3 outline-none" /></label></div>
+    {message && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{message}</div>}
+    {open && <form onSubmit={saveRecord} className="grid gap-4 rounded-3xl border border-border bg-card p-5 md:grid-cols-2"><h2 className="md:col-span-2 font-heading text-2xl font-bold">{editing ? 'Edit' : 'Add'} {tab === 'places' ? 'place' : 'platform'}</h2><Field label="Name" required value={form.name} onChange={value => setForm({ ...form, name: value })} />{tab === 'places' ? <><SelectField label="Type" value={form.type} options={PLACE_TYPES} onChange={value => setForm({ ...form, type: value })} /><Field label="Address" value={form.address} onChange={value => setForm({ ...form, address: value })} /><Field label="Latitude" type="number" step="any" value={form.latitude} onChange={value => setForm({ ...form, latitude: value })} /><Field label="Longitude" type="number" step="any" value={form.longitude} onChange={value => setForm({ ...form, longitude: value })} /><SelectField label="Linked platform" value={form.platform_id} options={['', ...(platforms ?? []).map(platform => platform.id)]} labels={['No linked platform', ...(platforms ?? []).map(platform => platform.name)]} onChange={value => setForm({ ...form, platform_id: value })} /></> : <><SelectField label="Category" value={form.category} options={PLATFORM_CATEGORIES} onChange={value => setForm({ ...form, category: value })} /><label className="flex items-center gap-2 self-end rounded-xl bg-muted px-3 py-3 text-sm font-semibold"><input type="checkbox" checked={Boolean(form.active)} onChange={event => setForm({ ...form, active: event.target.checked })} /> Active platform</label></>}<label className="text-sm font-semibold md:col-span-2">Notes<textarea value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} className="mt-2 min-h-24 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label><div className="flex gap-2 md:col-span-2"><button disabled={saving} className="rounded-xl bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{saving ? 'Saving…' : 'Save changes'}</button><button type="button" onClick={() => setOpen(false)} className="rounded-xl bg-muted px-5 py-3 font-bold hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Cancel</button></div></form>}
+    {loading ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[1, 2, 3, 4].map(item => <div key={item} className="h-36 animate-pulse rounded-3xl bg-muted" />)}</div> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-sm text-destructive">{error.message}<button onClick={tab === 'places' ? reloadPlaces : reloadPlatforms} className="ml-3 underline">Retry</button></div> : rows.length === 0 ? <div className="grid justify-items-center rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="MapPin" className="mb-3 text-muted-foreground" /><p className="mb-4 text-sm text-muted-foreground">No records yet. Add the first {tab === 'places' ? 'restaurant, hub or dark store' : 'delivery platform'}.</p><button onClick={startCreate} className="rounded-xl bg-primary px-4 py-2 font-bold text-primary-foreground">Add {tab === 'places' ? 'place' : 'platform'}</button></div> : <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{rows.map(row => <article key={row.id} className="rounded-3xl border border-border bg-card p-5 transition hover:shadow-(--shadow-sm)"><div className="mb-4 flex items-start justify-between gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-secondary text-secondary-foreground"><ApperIcon name={tab === 'places' ? row.type === 'Hub' ? 'Warehouse' : row.type === 'Dark Store' ? 'Store' : 'Utensils' : 'Layers'} /></span><div className="flex gap-1"><button aria-label={`Edit ${row.name}`} onClick={() => startEdit(row)} className="rounded-lg p-2 transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Pencil" /></button><button aria-label={`Delete ${row.name}`} onClick={() => deleteRecord(row)} className="rounded-lg p-2 text-destructive transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Trash2" /></button></div></div><h2 className="font-heading text-2xl font-bold">{row.name}</h2><span className="mt-1 inline-flex rounded-full bg-secondary px-2.5 py-1 text-xs font-bold text-secondary-foreground">{tab === 'places' ? row.type : row.category}</span>{tab === 'places' ? <><p className="mt-3 text-sm text-muted-foreground">{row.address || 'No address saved'}</p><p className="mt-2 text-xs text-muted-foreground">{row.latitude != null && row.longitude != null ? `${row.latitude}, ${row.longitude}` : 'No GPS coordinates saved'}</p></> : <p className="mt-3 text-sm text-muted-foreground">{row.active ? 'Active' : 'Paused'} · {row.notes || 'No notes'}</p>}</article>)}</div>}
+  </div>;
 }
+
+function emptyPlace() { return { name: '', type: 'Restaurant', address: '', latitude: '', longitude: '', platform_id: '', notes: '' }; }
+function emptyPlatform() { return { name: '', category: 'Food', active: true, notes: '' }; }
+function Field({ label, value, onChange, type = 'text', step, required }) { return <label className="text-sm font-semibold">{label}<input required={required} type={type} step={step} value={value} onChange={event => onChange(event.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>; }
+function SelectField({ label, value, options, labels, onChange }) { return <label className="text-sm font-semibold">{label}<select value={value} onChange={event => onChange(event.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{options.map((option, index) => <option key={option || `empty-${index}`} value={option}>{labels?.[index] ?? option}</option>)}</select></label>; }
