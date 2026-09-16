@@ -10,7 +10,7 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, code TEXT NOT NULL, platform_id TEXT, rider_id TEXT, status TEXT NOT NULL, pickup_place_id TEXT, pickup_address TEXT, drop_address TEXT, drop_latitude REAL, drop_longitude REAL, earning REAL NOT NULL DEFAULT 0, distance_km REAL NOT NULL DEFAULT 0, duration_min REAL NOT NULL DEFAULT 0, notes TEXT, accepted_at TEXT, picked_up_at TEXT, delivered_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS trips (id TEXT PRIMARY KEY, name TEXT NOT NULL, rider_id TEXT, status TEXT NOT NULL, started_at TEXT, ended_at TEXT, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS trip_orders (trip_id TEXT NOT NULL, order_id TEXT NOT NULL, sequence_no INTEGER NOT NULL, phase TEXT NOT NULL, PRIMARY KEY (trip_id, order_id))',
-  'CREATE TABLE IF NOT EXISTS gps_events (id TEXT PRIMARY KEY, order_id TEXT, trip_id TEXT, event_type TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, accuracy_m REAL, captured_at TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS gps_events (id TEXT PRIMARY KEY, order_id TEXT, trip_id TEXT, event_type TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, accuracy_m REAL, captured_at TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY, name TEXT NOT NULL, target REAL NOT NULL, saved REAL NOT NULL DEFAULT 0, deadline TEXT, rule TEXT NOT NULL, rule_value REAL NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS payments (id TEXT PRIMARY KEY, order_id TEXT, amount REAL NOT NULL, method TEXT NOT NULL, upi_reference TEXT, status TEXT NOT NULL, paid_at TEXT, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)'
 ];
@@ -63,6 +63,12 @@ export async function getDatabase() {
     databasePromise = initSqlJs({ locateFile: () => wasmUrl }).then(SQL => {
       database = load(SQL);
       SCHEMA.forEach(statement => database.run(statement));
+      const gpsColumns = select('PRAGMA table_info(gps_events)');
+      if (!gpsColumns.some(column => column.name === 'updated_at')) {
+        database.run('ALTER TABLE gps_events ADD COLUMN updated_at TEXT');
+        database.run('UPDATE gps_events SET updated_at = COALESCE(created_at, ?)', [timestamp()]);
+        save();
+      }
       const initialized = select('SELECT value FROM meta WHERE key = ?', ['initialized']);
       if (!initialized.length) {
         const created = timestamp();

@@ -1,13 +1,39 @@
 import { useMemo, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
-import { insert, remove, update } from '@/services/localDb';
+import { insert, query, remove, update } from '@/services/localDb';
 import { DATE_FORMATS, formatLocalDate } from '@/utils/date';
 
 export const route = { path: '/orders', layout: 'owner', access: 'public' };
 export const nav = { icon: 'PackageCheck', label: 'Orders', section: 'Operations', order: 3 };
 
 const STATUSES = ['Accepted', 'To Pickup', 'Arrived Pickup', 'Picked Up', 'To Drop', 'Delivered', 'Cancelled', 'Issue'];
+
+function platformShortCode(name) {
+  const normalized = String(name || 'PLT').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (normalized.includes('SWIGGY')) return 'SWG';
+  if (normalized.includes('ZOMATO')) return 'ZOM';
+  return normalized.slice(0, 3).padEnd(3, 'X');
+}
+
+function orderDatePart(date = new Date()) {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${day}${month}${date.getFullYear()}`;
+}
+
+async function nextOrderCode(platformId, platformName) {
+  const prefix = `${platformShortCode(platformName)}${orderDatePart()}`;
+  const existing = await query(
+    'SELECT code FROM orders WHERE platform_id = ? AND code LIKE ?',
+    [platformId, `${prefix}%`]
+  );
+  const sequence = existing.reduce((highest, row) => {
+    const suffix = String(row.code || '').slice(prefix.length);
+    return /^\d{4}$/.test(suffix) ? Math.max(highest, Number(suffix)) : highest;
+  }, 0) + 1;
+  return `${prefix}${String(sequence).padStart(4, '0')}`;
+}
 
 export default function Orders() {
   const [search, setSearch] = useState('');
@@ -16,7 +42,7 @@ export default function Orders() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
-  const [form, setForm] = useState({ code: '', platform_id: 'platform_swiggy', pickup_address: '', drop_address: '', earning: '', distance_km: '', notes: '' });
+  const [form, setForm] = useState({ platform_id: 'platform_swiggy', pickup_address: '', drop_address: '', earning: '', distance_km: '', notes: '' });
   const { data: orders, loading, error, run } = useLocalQuery(
     `SELECT o.*, p.name AS platform_name, pl.name AS pickup_name
      FROM orders o
@@ -45,9 +71,12 @@ export default function Orders() {
     setSaving(true);
     setMessage('');
     try {
+      const platform = (platforms ?? []).find(item => item.id === form.platform_id);
+      if (!platform) throw new Error('Select a valid platform before saving the order.');
+      const code = await nextOrderCode(platform.id, platform.name);
       await insert('orders', {
-        code: form.code.trim(),
-        platform_id: form.platform_id || null,
+        code,
+        platform_id: platform.id,
         status: 'Accepted',
         pickup_address: form.pickup_address.trim(),
         drop_address: form.drop_address.trim(),
@@ -56,7 +85,7 @@ export default function Orders() {
         notes: form.notes.trim(),
         accepted_at: new Date().toISOString()
       }, 'ord');
-      setForm({ code: '', platform_id: 'platform_swiggy', pickup_address: '', drop_address: '', earning: '', distance_km: '', notes: '' });
+      setForm({ platform_id: 'platform_swiggy', pickup_address: '', drop_address: '', earning: '', distance_km: '', notes: '' });
       setOpen(false);
       setMessage('Order saved locally in SQLite.');
       await run();
@@ -98,7 +127,7 @@ export default function Orders() {
 
       {open && <form onSubmit={createOrder} className="grid gap-4 rounded-3xl border border-border bg-card p-5 md:grid-cols-2">
         <h2 className="md:col-span-2 font-heading text-2xl font-bold">Record an accepted delivery</h2>
-        <Field label="Order ID / code" required value={form.code} onChange={value => setForm({ ...form, code: value })} />
+        <div className="rounded-xl bg-muted p-3 text-sm md:col-span-2"><p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Order ID</p><p className="mt-1 font-mono font-bold">Auto-generated on save</p><p className="mt-1 text-xs text-muted-foreground">Platform + DDMMYYYY + four-digit daily sequence, for example SWG170920260001.</p></div>
         <label className="text-sm font-semibold">Platform<select value={form.platform_id} onChange={event => setForm({ ...form, platform_id: event.target.value })} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{(platforms ?? []).map(platform => <option key={platform.id} value={platform.id}>{platform.name}</option>)}</select></label>
         <Field label="Pickup address" value={form.pickup_address} onChange={value => setForm({ ...form, pickup_address: value })} />
         <Field label="Drop address" value={form.drop_address} onChange={value => setForm({ ...form, drop_address: value })} />
