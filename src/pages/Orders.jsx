@@ -7,7 +7,7 @@ import { DATE_FORMATS, formatLocalDate } from '@/utils/date';
 export const route = { path: '/orders', layout: 'owner', access: 'public' };
 export const nav = { icon: 'PackageCheck', label: 'Orders', section: 'Operations', order: 3 };
 
-const STATUSES = ['Accepted', 'To Pickup', 'Arrived Pickup', 'Picked Up', 'To Drop', 'Delivered', 'Cancelled', 'Issue'];
+const STATUSES = ['Allocated', 'En Route Pickup', 'Arrived Pickup', 'Picked Up', 'En Route Customer', 'Arrived Customer', 'Delivered', 'Cancelled', 'Issue'];
 
 function platformShortCode(name) {
   const normalized = String(name || 'PLT').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -42,7 +42,7 @@ export default function Orders() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
-  const [form, setForm] = useState({ platform_id: 'platform_swiggy', pickup_address: '', drop_address: '', earning: '', distance_km: '', notes: '' });
+  const [form, setForm] = useState({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', notes: '' });
   const { data: orders, loading, error, run } = useLocalQuery(
     `SELECT o.*, p.name AS platform_name, pl.name AS pickup_name
      FROM orders o
@@ -53,6 +53,8 @@ export default function Orders() {
     []
   );
   const { data: platforms } = useLocalQuery('SELECT id, name FROM platforms WHERE active = 1 ORDER BY name', [], []);
+  const { data: places } = useLocalQuery('SELECT id, name, type, address, latitude, longitude, platform_id FROM places ORDER BY name', [], []);
+  const availablePlaces = useMemo(() => (places ?? []).filter(place => !place.platform_id || place.platform_id === form.platform_id), [places, form.platform_id]);
 
   const rows = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -73,19 +75,25 @@ export default function Orders() {
     try {
       const platform = (platforms ?? []).find(item => item.id === form.platform_id);
       if (!platform) throw new Error('Select a valid platform before saving the order.');
+      const pickup = availablePlaces.find(item => item.id === form.pickup_place_id);
+      if (!pickup) throw new Error('Select the restaurant, hub or dark store where this order will be collected.');
       const code = await nextOrderCode(platform.id, platform.name);
       await insert('orders', {
         code,
         platform_id: platform.id,
-        status: 'Accepted',
-        pickup_address: form.pickup_address.trim(),
+        status: 'Allocated',
+        pickup_place_id: pickup.id,
+        pickup_address: pickup.address || pickup.name,
+        pickup_latitude: Number.isFinite(Number(pickup.latitude)) ? Number(pickup.latitude) : null,
+        pickup_longitude: Number.isFinite(Number(pickup.longitude)) ? Number(pickup.longitude) : null,
         drop_address: form.drop_address.trim(),
         earning: Number(form.earning || 0),
-        distance_km: Number(form.distance_km || 0),
+        distance_km: 0,
+        duration_min: 0,
         notes: form.notes.trim(),
         accepted_at: new Date().toISOString()
       }, 'ord');
-      setForm({ platform_id: 'platform_swiggy', pickup_address: '', drop_address: '', earning: '', distance_km: '', notes: '' });
+      setForm({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', notes: '' });
       setOpen(false);
       setMessage('Order saved locally in SQLite.');
       await run();
@@ -94,15 +102,6 @@ export default function Orders() {
     } finally {
       setSaving(false);
     }
-  }
-
-  async function changeStatus(order, nextStatus) {
-    const updates = { status: nextStatus };
-    if (nextStatus === 'Picked Up') updates.picked_up_at = new Date().toISOString();
-    if (nextStatus === 'Delivered') updates.delivered_at = new Date().toISOString();
-    await update('orders', order.id, updates);
-    setMessage(`${order.code} moved to ${nextStatus}.`);
-    await run();
   }
 
   async function deleteOrder(order) {
@@ -134,11 +133,10 @@ export default function Orders() {
       {open && <form onSubmit={createOrder} className="grid gap-4 rounded-3xl border border-border bg-card p-5 md:grid-cols-2">
         <h2 className="md:col-span-2 font-heading text-2xl font-bold">Record an accepted delivery</h2>
         <div className="rounded-xl bg-muted p-3 text-sm md:col-span-2"><p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Order ID</p><p className="mt-1 font-mono font-bold">Auto-generated on save</p><p className="mt-1 text-xs text-muted-foreground">Platform + DDMMYYYY + four-digit daily sequence, for example SWG170920260001.</p></div>
-        <label className="text-sm font-semibold">Platform<select value={form.platform_id} onChange={event => setForm({ ...form, platform_id: event.target.value })} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{(platforms ?? []).map(platform => <option key={platform.id} value={platform.id}>{platform.name}</option>)}</select></label>
-        <Field label="Pickup address" value={form.pickup_address} onChange={value => setForm({ ...form, pickup_address: value })} />
-        <Field label="Drop address" value={form.drop_address} onChange={value => setForm({ ...form, drop_address: value })} />
+        <label className="text-sm font-semibold">Platform<select value={form.platform_id} onChange={event => setForm({ ...form, platform_id: event.target.value, pickup_place_id: '' })} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{(platforms ?? []).map(platform => <option key={platform.id} value={platform.id}>{platform.name}</option>)}</select></label>
+        <label className="text-sm font-semibold">Pickup point<select required value={form.pickup_place_id} onChange={event => setForm({ ...form, pickup_place_id: event.target.value })} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><option value="">Select restaurant, hub or dark store</option>{availablePlaces.map(place => <option key={place.id} value={place.id}>{place.name} · {place.type}</option>)}</select><span className="mt-1 block text-xs font-normal text-muted-foreground">Saved pickup GPS: {availablePlaces.find(place => place.id === form.pickup_place_id)?.latitude != null ? 'coordinates available' : 'add coordinates in Places'}</span></label>
+        <Field label="Customer address" value={form.drop_address} onChange={value => setForm({ ...form, drop_address: value })} required />
         <Field label="Expected earning ₹" type="number" value={form.earning} onChange={value => setForm({ ...form, earning: value })} />
-        <Field label="Estimated distance km" type="number" step="0.1" value={form.distance_km} onChange={value => setForm({ ...form, distance_km: value })} />
         <label className="text-sm font-semibold md:col-span-2">Notes<textarea value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} className="mt-2 min-h-24 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>
         <div className="flex gap-2 md:col-span-2"><button disabled={saving} className="rounded-xl bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{saving ? 'Saving…' : 'Save order'}</button><button type="button" onClick={() => setOpen(false)} className="rounded-xl bg-muted px-5 py-3 font-bold text-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Cancel</button></div>
       </form>}
@@ -155,7 +153,7 @@ export default function Orders() {
         {rows.map(order => <div key={order.id} className="grid gap-3 border-t border-border px-4 py-3.5 first:border-0 md:grid-cols-[1.2fr_.7fr_1fr_1fr_.65fr_auto] md:items-center">
           <div><strong className="block">{order.code}</strong><small className="text-xs text-muted-foreground">{formatLocalDate(order.created_at, DATE_FORMATS.SHORT)}</small></div>
           <span className="text-sm">{order.platform_name || '—'}</span>
-          <select value={order.status} onChange={event => changeStatus(order, event.target.value)} className="w-full rounded-lg border border-input bg-background px-2 py-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{STATUSES.map(value => <option key={value}>{value}</option>)}</select>
+          <StatusBadge status={order.status} />
           <span className="truncate text-sm" title={order.drop_address || ''}>{order.drop_address || 'No drop address'}</span>
           <strong className="tabular-nums">₹{Number(order.earning).toFixed(0)}</strong>
           <button aria-label={`Delete ${order.code}`} onClick={() => deleteOrder(order)} className="rounded-lg p-2 text-destructive transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Trash2" className="h-4 w-4" /></button>
@@ -163,6 +161,13 @@ export default function Orders() {
       </div>}
     </div>
   );
+}
+
+function StatusBadge({ status }) {
+  const active = ['Allocated', 'En Route Pickup', 'Arrived Pickup', 'Picked Up', 'En Route Customer', 'Arrived Customer'].includes(status);
+  const done = status === 'Delivered';
+  const tone = done ? 'bg-success/10 text-success' : active ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground';
+  return <span className={`inline-flex w-fit rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{status}</span>;
 }
 
 function Field({ label, value, onChange, type = 'text', step, required }) {
