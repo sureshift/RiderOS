@@ -29,16 +29,24 @@ export default function Settings() {
 
   function saveUpi(event) {
     event.preventDefault();
-    if (!/^[-\w.@]{2,256}$/.test(upi.vpa)) { setMessage('Enter a valid UPI ID such as name@indus.'); return; }
+    if (!/^[-\w.@]{2,256}$/.test(upi.vpa)) {
+      setMessage('Enter a valid UPI ID such as name@indus.');
+      return;
+    }
     localStorage.setItem(UPI_KEY, JSON.stringify(upi));
     setMessage('UPI receive details saved on this device.');
   }
 
   async function backup() {
     setBusy(true);
-    try { downloadDatabase(await exportDatabase()); setMessage('SQLite backup downloaded. Keep it somewhere separate from the device.'); }
-    catch (err) { setMessage(err.message || 'Backup failed.'); }
-    finally { setBusy(false); }
+    try {
+      downloadDatabase(await exportDatabase());
+      setMessage('SQLite backup downloaded. Keep it somewhere separate from the device.');
+    } catch (err) {
+      setMessage(err.message || 'Backup failed.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function restore(event) {
@@ -47,9 +55,14 @@ export default function Settings() {
     if (!file) return;
     if (!window.confirm('Restore this SQLite file? The current local database will be replaced.')) return;
     setBusy(true);
-    try { await importDatabase(file); setMessage('SQLite database restored. Reload the app to refresh every screen.'); }
-    catch (err) { setMessage(err.message || 'Restore failed.'); }
-    finally { setBusy(false); }
+    try {
+      await importDatabase(file);
+      setMessage('SQLite database restored. Reload the app to refresh every screen.');
+    } catch (err) {
+      setMessage(err.message || 'Restore failed.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   function saveDriveClient() {
@@ -99,10 +112,10 @@ export default function Settings() {
       const metadata = { name: `rideros-${new Date().toISOString().replaceAll(':', '-')}.sqlite`, parents: ['appDataFolder'] };
       const boundary = `rideros_${crypto.randomUUID()}`;
       const body = new Blob([
-        `--${boundary}\\r\\nContent-Type: application/json; charset=UTF-8\\r\\n\\r\\n${JSON.stringify(metadata)}\\r\\n`,
-        `--${boundary}\\r\\nContent-Type: application/x-sqlite3\\r\\n\\r\\n`,
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
+        `--${boundary}\r\nContent-Type: application/x-sqlite3\r\n\r\n`,
         bytes,
-        `\\r\\n--${boundary}--`
+        `\r\n--${boundary}--`
       ], { type: `multipart/related; boundary=${boundary}` });
       const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,createdTime', {
         method: 'POST',
