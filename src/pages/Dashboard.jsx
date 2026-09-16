@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
-import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import { divIcon } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 export const route = { path: '/dashboard', layout: 'owner', access: 'public' };
@@ -84,7 +85,7 @@ function DeliveryHeatmap({ orders, gpsEvents }) {
         <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <HeatmapViewport points={points} />
         {clusters.map(cluster => <CircleMarker key={`zone-${cluster.lat}-${cluster.lng}`} center={[cluster.lat, cluster.lng]} radius={18 + (cluster.count / maxCount) * 28} pathOptions={{ color: '#dc2626', fillColor: '#ef4444', fillOpacity: 0.14, weight: 1 }}><Tooltip>{cluster.count} order{cluster.count === 1 ? '' : 's'} in this demand zone</Tooltip></CircleMarker>)}
-        {clusters.map(cluster => <CircleMarker key={`core-${cluster.lat}-${cluster.lng}`} center={[cluster.lat, cluster.lng]} radius={7 + (cluster.count / maxCount) * 9} pathOptions={{ color: '#dc2626', fillColor: '#ef4444', fillOpacity: 0.42, weight: 0 }} />)}
+        {clusters.map(cluster => <Marker key={`label-${cluster.lat}-${cluster.lng}`} position={[cluster.lat, cluster.lng]} icon={divIcon({ className: 'demand-arrow-marker', html: `<div style="display:flex;flex-direction:column;align-items:center;transform:translateY(-6px)"><div style="display:flex;align-items:center;justify-content:center;min-width:34px;height:28px;padding:0 8px;border-radius:999px;background:#dc2626;color:#fff;font-weight:800;font-size:12px;box-shadow:0 3px 10px rgba(0,0,0,.22)">${cluster.count}</div><div style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-top:10px solid #dc2626"></div></div>`, iconSize: [48, 48], iconAnchor: [24, 38] })}><Tooltip>{cluster.count} order{cluster.count === 1 ? '' : 's'} in this demand zone</Tooltip></Marker>)}
         {points.map((point, index) => <CircleMarker key={`${point.code}-${index}`} center={[point.lat, point.lng]} radius={4} pathOptions={{ color: 'var(--primary)', fillColor: 'var(--primary)', fillOpacity: 0.7, weight: 1 }}><Tooltip>{point.code}</Tooltip></CircleMarker>)}
       </MapContainer>
       <div className="absolute bottom-4 left-4 rounded-xl border border-border bg-card/95 px-3 py-2 shadow-(--shadow-sm)"><p className="text-xs font-semibold">{points.length} geolocated deliveries</p><p className="text-[11px] text-muted-foreground">{clusters.length} demand zones · peak {maxCount} orders</p></div>
