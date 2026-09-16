@@ -7,7 +7,7 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS platforms (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT, active INTEGER NOT NULL DEFAULT 1, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS places (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, address TEXT, latitude REAL, longitude REAL, platform_id TEXT, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS riders (id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, active INTEGER NOT NULL DEFAULT 1, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
-  'CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, code TEXT NOT NULL, platform_id TEXT, rider_id TEXT, status TEXT NOT NULL, pickup_place_id TEXT, pickup_address TEXT, pickup_latitude REAL, pickup_longitude REAL, drop_address TEXT, drop_latitude REAL, drop_longitude REAL, earning REAL NOT NULL DEFAULT 0, distance_km REAL NOT NULL DEFAULT 0, duration_min REAL NOT NULL DEFAULT 0, notes TEXT, accepted_at TEXT, arrived_pickup_at TEXT, picked_up_at TEXT, arrived_customer_at TEXT, delivered_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, code TEXT NOT NULL, platform_id TEXT, rider_id TEXT, status TEXT NOT NULL, pickup_place_id TEXT, pickup_address TEXT, pickup_latitude REAL, pickup_longitude REAL, drop_address TEXT, drop_latitude REAL, drop_longitude REAL, earning REAL NOT NULL DEFAULT 0, distance_km REAL NOT NULL DEFAULT 0, duration_min REAL NOT NULL DEFAULT 0, payment_type TEXT NOT NULL DEFAULT \'PREPAID\', cod_amount REAL NOT NULL DEFAULT 0, notes TEXT, accepted_at TEXT, arrived_pickup_at TEXT, picked_up_at TEXT, arrived_customer_at TEXT, delivered_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS trips (id TEXT PRIMARY KEY, name TEXT NOT NULL, rider_id TEXT, status TEXT NOT NULL, started_at TEXT, ended_at TEXT, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS trip_orders (trip_id TEXT NOT NULL, order_id TEXT NOT NULL, sequence_no INTEGER NOT NULL, phase TEXT NOT NULL, PRIMARY KEY (trip_id, order_id))',
   'CREATE TABLE IF NOT EXISTS gps_events (id TEXT PRIMARY KEY, order_id TEXT, trip_id TEXT, event_type TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, accuracy_m REAL, captured_at TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
@@ -74,6 +74,8 @@ export async function getDatabase() {
       [
         ['pickup_latitude', 'REAL'],
         ['pickup_longitude', 'REAL'],
+        ['payment_type', "TEXT NOT NULL DEFAULT 'PREPAID'"],
+        ['cod_amount', 'REAL NOT NULL DEFAULT 0'],
         ['arrived_pickup_at', 'TEXT'],
         ['arrived_customer_at', 'TEXT']
       ].forEach(([column, type]) => {

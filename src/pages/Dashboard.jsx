@@ -17,8 +17,9 @@ export default function Dashboard() {
   const earnings = delivered.reduce((sum, order) => sum + Number(order.earning || 0), 0);
   const distance = (orders ?? []).reduce((sum, order) => sum + Number(order.distance_km || 0), 0);
   const avgDeliveryMinutes = delivered.length ? delivered.reduce((sum, order) => sum + Number(order.duration_min || 0), 0) / delivered.length : 0;
-  const avgPickupMinutes = delivered.filter(order => order.arrived_pickup_at && order.picked_up_at).length
-    ? delivered.reduce((sum, order) => sum + elapsedMinutes(order.arrived_pickup_at, order.picked_up_at), 0) / delivered.filter(order => order.arrived_pickup_at && order.picked_up_at).length
+  const pickupWaitRows = delivered.filter(order => order.arrived_pickup_at && order.picked_up_at);
+  const avgPickupMinutes = pickupWaitRows.length
+    ? pickupWaitRows.reduce((sum, order) => sum + elapsedMinutes(order.arrived_pickup_at, order.picked_up_at), 0) / pickupWaitRows.length
     : 0;
   const goalProgress = useMemo(() => {
     const activeGoals = goals ?? [];
@@ -82,14 +83,12 @@ function DeliveryHeatmap({ orders, gpsEvents }) {
       <MapContainer center={center} zoom={12} scrollWheelZoom className="h-80 w-full md:h-96">
         <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <HeatmapViewport points={points} />
-        {clusters.map(cluster => <CircleMarker key={`zone-${cluster.lat}-${cluster.lng}`} center={[cluster.lat, cluster.lng]} radius={18 + (cluster.count / maxCount) * 28} pathOptions={{ color: 'var(--primary)', fillColor: 'var(--primary)', fillOpacity: 0.12, weight: 1 }}>
-          <Tooltip>{cluster.count} order{cluster.count === 1 ? '' : 's'} in this demand zone</Tooltip>
-        </CircleMarker>)}
-        {clusters.map(cluster => <CircleMarker key={`core-${cluster.lat}-${cluster.lng}`} center={[cluster.lat, cluster.lng]} radius={7 + (cluster.count / maxCount) * 9} pathOptions={{ color: 'var(--primary)', fillColor: 'var(--primary)', fillOpacity: 0.42, weight: 0 }} />)}
+        {clusters.map(cluster => <CircleMarker key={`zone-${cluster.lat}-${cluster.lng}`} center={[cluster.lat, cluster.lng]} radius={18 + (cluster.count / maxCount) * 28} pathOptions={{ color: '#dc2626', fillColor: '#ef4444', fillOpacity: 0.14, weight: 1 }}><Tooltip>{cluster.count} order{cluster.count === 1 ? '' : 's'} in this demand zone</Tooltip></CircleMarker>)}
+        {clusters.map(cluster => <CircleMarker key={`core-${cluster.lat}-${cluster.lng}`} center={[cluster.lat, cluster.lng]} radius={7 + (cluster.count / maxCount) * 9} pathOptions={{ color: '#dc2626', fillColor: '#ef4444', fillOpacity: 0.42, weight: 0 }} />)}
         {points.map((point, index) => <CircleMarker key={`${point.code}-${index}`} center={[point.lat, point.lng]} radius={4} pathOptions={{ color: 'var(--primary)', fillColor: 'var(--primary)', fillOpacity: 0.7, weight: 1 }}><Tooltip>{point.code}</Tooltip></CircleMarker>)}
       </MapContainer>
       <div className="absolute bottom-4 left-4 rounded-xl border border-border bg-card/95 px-3 py-2 shadow-(--shadow-sm)"><p className="text-xs font-semibold">{points.length} geolocated deliveries</p><p className="text-[11px] text-muted-foreground">{clusters.length} demand zones · peak {maxCount} orders</p></div>
-      <div className="absolute right-4 top-4 rounded-xl border border-border bg-card/95 px-3 py-2 text-[11px] text-muted-foreground shadow-(--shadow-sm)"><span>Cool</span><span className="mx-2 inline-block h-1.5 w-16 rounded-full bg-primary/20 align-middle" /><span>Peak</span></div>
+      <div className="absolute right-4 top-4 rounded-xl border border-border bg-card/95 px-3 py-2 text-[11px] text-muted-foreground shadow-(--shadow-sm)"><span>Low</span><span className="mx-2 inline-block h-1.5 w-16 rounded-full bg-red-200 align-middle" /><span className="font-bold text-red-600">Peak</span></div>
     </div>}
   </section>;
 }

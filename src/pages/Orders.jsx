@@ -42,7 +42,7 @@ export default function Orders() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
-  const [form, setForm] = useState({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', notes: '' });
+  const [form, setForm] = useState({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', payment_type: 'PREPAID', cod_amount: '', notes: '' });
   const { data: orders, loading, error, run } = useLocalQuery(
     `SELECT o.*, p.name AS platform_name, pl.name AS pickup_name
      FROM orders o
@@ -90,10 +90,12 @@ export default function Orders() {
         earning: Number(form.earning || 0),
         distance_km: 0,
         duration_min: 0,
+        payment_type: form.payment_type,
+        cod_amount: form.payment_type === 'COD' ? Number(form.cod_amount || 0) : 0,
         notes: form.notes.trim(),
         accepted_at: new Date().toISOString()
       }, 'ord');
-      setForm({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', notes: '' });
+      setForm({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', payment_type: 'PREPAID', cod_amount: '', notes: '' });
       setOpen(false);
       setMessage('Order saved locally in SQLite.');
       await run();
@@ -137,6 +139,8 @@ export default function Orders() {
         <label className="text-sm font-semibold">Pickup point<select required value={form.pickup_place_id} onChange={event => setForm({ ...form, pickup_place_id: event.target.value })} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><option value="">Select restaurant, hub or dark store</option>{availablePlaces.map(place => <option key={place.id} value={place.id}>{place.name} · {place.type}</option>)}</select><span className="mt-1 block text-xs font-normal text-muted-foreground">Saved pickup GPS: {availablePlaces.find(place => place.id === form.pickup_place_id)?.latitude != null ? 'coordinates available' : 'add coordinates in Places'}</span></label>
         <Field label="Customer address" value={form.drop_address} onChange={value => setForm({ ...form, drop_address: value })} required />
         <Field label="Expected earning ₹" type="number" value={form.earning} onChange={value => setForm({ ...form, earning: value })} />
+        <label className="text-sm font-semibold">Payment type<select value={form.payment_type} onChange={event => setForm({ ...form, payment_type: event.target.value })} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><option value="PREPAID">Prepaid</option><option value="COD">COD — collect at delivery</option></select></label>
+        {form.payment_type === 'COD' && <Field label="COD amount to collect ₹" type="number" value={form.cod_amount} onChange={value => setForm({ ...form, cod_amount: value })} required />}
         <label className="text-sm font-semibold md:col-span-2">Notes<textarea value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} className="mt-2 min-h-24 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>
         <div className="flex gap-2 md:col-span-2"><button disabled={saving} className="rounded-xl bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{saving ? 'Saving…' : 'Save order'}</button><button type="button" onClick={() => setOpen(false)} className="rounded-xl bg-muted px-5 py-3 font-bold text-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Cancel</button></div>
       </form>}
