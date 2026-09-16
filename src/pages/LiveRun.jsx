@@ -58,7 +58,10 @@ export default function LiveRun() {
         }, 'gps');
         const distance = await calculateOrderDistance(orderId);
         await update('orders', orderId, { distance_km: Number(distance.toFixed(3)) });
-        if (!cancelled) setTrackingState({ active: true, lastCapturedAt: capturedAt, error: '' });
+        if (!cancelled) {
+          setTrackingState({ active: true, lastCapturedAt: capturedAt, error: '' });
+          await run();
+        }
       } catch (err) {
         if (!cancelled) setTrackingState(state => ({ ...state, active: false, error: err.message || 'GPS tracking is unavailable.' }));
       }
@@ -135,7 +138,7 @@ export default function LiveRun() {
       <div className="rounded-3xl border border-border bg-muted p-5"><p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Current focus</p><h2 className="mt-2 font-heading text-3xl font-bold">{current?.code ?? 'No active order'}</h2><p className="mt-1 text-sm text-muted-foreground">{current ? `${current.platform_name || 'Platform'} · ${current.status}` : 'Add an order to begin a run.'}</p></div>
     </section>
     {notice && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{notice}</div>}
-    {loading ? <div className="grid gap-5 xl:grid-cols-2">{[1, 2].map(item => <div key={item} className="h-80 animate-pulse rounded-3xl bg-muted" />)}</div> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-destructive">{error.message}<button onClick={run} className="ml-3 underline">Retry</button></div> : active.length === 0 ? <div className="grid justify-items-center rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="Route" className="mb-3 text-muted-foreground" /><h2 className="font-heading text-3xl font-bold">Run is clear</h2><p className="mt-2 max-w-md text-sm text-muted-foreground">There are no open deliveries. Add an order, then return here to capture its journey.</p></div> : <div className="grid gap-5 xl:grid-cols-2">{active.map(order => <RunCard key={order.id} order={order} busy={busy === order.id} onAdvance={advance} onSetStatus={transition} />)}</div>}
+    {loading ? <div className="grid gap-5 xl:grid-cols-2">{[1, 2].map(item => <div key={item} className="h-80 animate-pulse rounded-3xl bg-muted" />)}</div> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-destructive">{error.message}<button onClick={run} className="ml-3 underline">Retry</button></div> : active.length === 0 ? <div className="grid justify-items-center rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="Route" className="mb-3 text-muted-foreground" /><h2 className="font-heading text-3xl font-bold">Run is clear</h2><p className="mt-2 max-w-md text-sm text-muted-foreground">There are no open deliveries. Add an order, then return here to capture its journey.</p></div> : <div className="grid gap-5 xl:grid-cols-2">{active.map(order => <RunCard key={order.id} order={order} busy={busy === order.id} onAdvance={advance} />)}</div>}
   </div>;
 }
 

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
-import { insert, query, remove, update } from '@/services/localDb';
+import { insert, query, remove } from '@/services/localDb';
 import { DATE_FORMATS, formatLocalDate } from '@/utils/date';
 
 export const route = { path: '/orders', layout: 'owner', access: 'public' };
@@ -127,7 +127,7 @@ export default function Orders() {
       </header>
 
       <div className="grid gap-2 overflow-x-auto pb-1 sm:grid-cols-4">
-        {['All', 'Accepted', 'Picked Up', 'Delivered'].map(value => <button key={value} onClick={() => setStatus(value)} className={`min-w-32 rounded-xl border px-3 py-2.5 text-left transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${status === value ? 'border-primary bg-primary/10' : 'border-border bg-card'}`}><span className="block text-xs font-semibold text-muted-foreground">{value}</span><strong className="text-xl tabular-nums">{value === 'All' ? (orders ?? []).length : statusCounts[value] || 0}</strong></button>)}
+        {['All', 'Allocated', 'Picked Up', 'Delivered'].map(value => <button key={value} onClick={() => setStatus(value)} className={`min-w-32 rounded-xl border px-3 py-2.5 text-left transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${status === value ? 'border-primary bg-primary/10' : 'border-border bg-card'}`}><span className="block text-xs font-semibold text-muted-foreground">{value}</span><strong className="text-xl tabular-nums">{value === 'All' ? (orders ?? []).length : statusCounts[value] || 0}</strong></button>)}
       </div>
 
       {open && <form onSubmit={createOrder} className="grid gap-4 rounded-3xl border border-border bg-card p-5 md:grid-cols-2">
