@@ -39,7 +39,7 @@ function DeliveryHeatmap({ orders, gpsEvents }) {
     (gpsEvents ?? []).forEach(event => {
       const lat = Number(event.latitude);
       const lng = Number(event.longitude);
-      if (!event.order_id || !isValidCoordinate(lat, lng)) return;
+      if (!event.order_id || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return;
       if (!gpsByOrder.has(event.order_id)) gpsByOrder.set(event.order_id, []);
       gpsByOrder.get(event.order_id).push({ lat, lng, type: String(event.event_type || '').toLowerCase() });
     });
@@ -47,7 +47,7 @@ function DeliveryHeatmap({ orders, gpsEvents }) {
     return (orders ?? []).map(order => {
       const lat = Number(order.drop_latitude);
       const lng = Number(order.drop_longitude);
-      if (isValidCoordinate(lat, lng)) return { lat, lng, code: order.code };
+      if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0)) return { lat, lng, code: order.code };
       const events = gpsByOrder.get(order.id) ?? [];
       const delivery = events.find(point => /drop|deliver/.test(point.type));
       return delivery ? { lat: delivery.lat, lng: delivery.lng, code: order.code } : null;
