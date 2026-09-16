@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
 import { insert, remove, update } from '@/services/localDb';
+import { getGoalMetrics, getOrderIntensity } from '@/services/allocation';
 
 export const route = { path: '/goals', layout: 'owner', access: 'public' };
 export const nav = { icon: 'Wallet', label: 'Goals & money', section: 'Operations', order: 5 };
