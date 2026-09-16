@@ -207,6 +207,46 @@ export default function LiveRun() {
 }
 
 function RunCard({ order, busy, onAdvance }) {
+  const [upiPayload, setUpiPayload] = useState(null);
+  const [paymentRows, setPaymentRows] = useState([]);
+  const [paymentMessage, setPaymentMessage] = useState('');
+  const payment = paymentRows[0];
+
+  useEffect(() => {
+    let cancelled = false;
+    query('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [order.id]).then(rows => {
+      if (!cancelled) setPaymentRows(rows);
+    });
+    return () => { cancelled = true; };
+  }, [order.id, order.status]);
+
+  function showSliceQr() {
+    const amount = Number(order.cod_amount || 0);
+    const stored = localStorage.getItem(SLICE_KEY);
+    const account = stored ? JSON.parse(stored) : null;
+    if (!amount) return setPaymentMessage('COD amount is missing on this order.');
+    if (!account?.vpa) return setPaymentMessage('Add your Slice UPI ID in Settings before collecting COD by UPI.');
+    const paymentUri = `upi://pay?${new URLSearchParams({ pa: account.vpa, pn: account.payee || 'Delivery', am: amount.toFixed(2), cu: 'INR', tn: `COD ${order.code}` }).toString()}`;
+    setUpiPayload({ paymentUri, amount, vpa: account.vpa, payee: account.payee || 'Delivery' });
+    setPaymentMessage(`QR ready for ₹${amount.toFixed(2)}.`);
+  }
+
+  async function collectCash() {
+    const amount = Number(order.cod_amount || 0);
+    if (!amount) return setPaymentMessage('COD amount is missing on this order.');
+    await insert('payments', { order_id: order.id, amount, method: 'cash', status: 'PAID', paid_at: new Date().toISOString(), notes: 'Cash collected by rider' }, 'pay');
+    setPaymentMessage(`Cash ₹${amount.toFixed(2)} marked as received.`);
+    setPaymentRows(await query('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [order.id]));
+  }
+
+  async function markUpiReceived() {
+    const amount = Number(order.cod_amount || 0);
+    const reference = window.prompt('Enter the UPI transaction / UTR reference (optional). Leave blank if you only want to mark the amount received.');
+    await insert('payments', { order_id: order.id, amount, method: 'upi', status: 'PAID', upi_reference: reference?.trim() || null, paid_at: new Date().toISOString(), notes: 'UPI payment received and confirmed by rider' }, 'pay');
+    setUpiPayload(null);
+    setPaymentMessage(`UPI ₹${amount.toFixed(2)} marked as received.`);
+    setPaymentRows(await query('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [order.id]));
+  }
   const index = PHASES.indexOf(order.status);
   const next = PHASES[index + 1];
   const actionLabels = {
@@ -221,7 +261,7 @@ function RunCard({ order, busy, onAdvance }) {
     ? Number(order.duration_min || 0)
     : (Date.now() - new Date(order.accepted_at).getTime()) / 60000;
 
-  return <article className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-start justify-between gap-3"><div className="min-w-0"><span className="mb-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground">{order.platform_name || 'Platform'}</span><h2 className="font-heading text-3xl font-bold">{order.code}</h2><p className="text-sm text-muted-foreground">Pickup: {order.pickup_name || order.pickup_address || 'Not assigned'}</p><p className="truncate text-sm text-muted-foreground" title={order.drop_address || ''}>Customer: {order.drop_address || 'No destination saved'}</p></div><strong className="shrink-0 text-lg tabular-nums">₹{Number(order.earning || 0).toFixed(0)}</strong></div><div className="mb-5 grid gap-3 sm:grid-cols-3"><MiniMetric label="Distance" value={`${Number(order.distance_km || 0).toFixed(2)} km`} /><MiniMetric label="Run time" value={formatDuration(elapsed)} /><MiniMetric label="Payment" value={order.payment_type === 'COD' ? `COD ₹${Number(order.cod_amount || 0).toFixed(0)}` : 'Prepaid'} /></div><div className="mb-6 space-y-2">{PHASES.map((phase, step) => <div key={phase} className="flex items-center gap-3"><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${step < index ? 'bg-success text-success-foreground' : step === index ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{step < index ? <ApperIcon name="Check" /> : step + 1}</span><span className={step === index ? 'font-bold' : 'text-sm text-muted-foreground'}>{phase}</span>{step === index && <span className="ml-auto text-xs font-bold text-primary">CURRENT</span>}</div>)}</div><div className="rounded-2xl bg-muted p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next rider action</p><p className="mt-1 text-sm font-semibold">{actionLabels[next] || 'Delivery complete'}</p><button disabled={busy || !next} onClick={() => onAdvance(order)} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-50">{busy ? 'Saving GPS…' : actionLabels[next] || 'Delivered'}<ApperIcon name="MapPin" /></button>{next === 'Delivered' && order.payment_type === 'COD' && <p className="mt-2 text-center text-xs font-semibold text-destructive">COD payment must be recorded before delivery.</p>}</div></article>;
+  return <article className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-start justify-between gap-3"><div className="min-w-0"><span className="mb-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground">{order.platform_name || 'Platform'}</span><h2 className="font-heading text-3xl font-bold">{order.code}</h2><p className="text-sm text-muted-foreground">Pickup: {order.pickup_name || order.pickup_address || 'Not assigned'}</p><p className="truncate text-sm text-muted-foreground" title={order.drop_address || ''}>Customer: {order.drop_address || 'No destination saved'}</p></div><strong className="shrink-0 text-lg tabular-nums">₹{Number(order.earning || 0).toFixed(0)}</strong></div><div className="mb-5 grid gap-3 sm:grid-cols-3"><MiniMetric label="Distance" value={`${Number(order.distance_km || 0).toFixed(2)} km`} /><MiniMetric label="Run time" value={formatDuration(elapsed)} /><MiniMetric label="Payment" value={order.payment_type === 'COD' ? `COD ₹${Number(order.cod_amount || 0).toFixed(0)}` : 'Prepaid'} /></div><div className="mb-6 space-y-2">{PHASES.map((phase, step) => <div key={phase} className="flex items-center gap-3"><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${step < index ? 'bg-success text-success-foreground' : step === index ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{step < index ? <ApperIcon name="Check" /> : step + 1}</span><span className={step === index ? 'font-bold' : 'text-sm text-muted-foreground'}>{phase}</span>{step === index && <span className="ml-auto text-xs font-bold text-primary">CURRENT</span>}</div>)}</div>{next === 'Delivered' && order.payment_type === 'COD' && <div className="mb-4 rounded-2xl border border-border bg-muted p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wide text-primary">Before delivery — COD collection</p><p className="mt-1 font-heading text-2xl font-bold">Collect ₹{Number(order.cod_amount || 0).toFixed(2)}</p><p className="mt-1 text-xs text-muted-foreground">Cash or Slice UPI. Delivery stays locked until the amount is marked received.</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${payment?.status === 'PAID' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{payment?.status === 'PAID' ? 'PAID' : 'PAYMENT DUE'}</span></div><div className="mt-3 grid gap-2 sm:grid-cols-3"><button onClick={collectCash} disabled={payment?.status === 'PAID'} className="rounded-xl bg-foreground px-4 py-3 font-bold text-background disabled:opacity-50"><ApperIcon name="Banknote" className="mr-2 inline h-4 w-4" />Collect cash</button><button onClick={showSliceQr} disabled={payment?.status === 'PAID'} className="rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50"><ApperIcon name="QrCode" className="mr-2 inline h-4 w-4" />Show Slice QR</button><button onClick={markUpiReceived} disabled={payment?.status === 'PAID'} className="rounded-xl border border-border px-4 py-3 font-bold disabled:opacity-50">Mark amount received</button></div>{upiPayload && <div className="mt-4 grid gap-4 rounded-2xl bg-background p-4 sm:grid-cols-[auto_1fr] sm:items-center"><div className="rounded-2xl bg-card p-3"><QRCodeCanvas value={upiPayload.paymentUri} size={220} includeMargin /></div><div><p className="text-sm font-bold">Scan to pay ₹{Number(upiPayload.amount).toFixed(2)}</p><p className="mt-1 text-xs text-muted-foreground">{upiPayload.payee} · {upiPayload.vpa}</p><p className="mt-3 text-xs leading-relaxed text-muted-foreground">Verify the successful credit in the Slice app, then tap “Mark amount received”.</p></div></div>}{paymentMessage && <p className="mt-3 text-sm font-semibold text-muted-foreground">{paymentMessage}</p>}</div>}<div className="rounded-2xl bg-muted p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next rider action</p><p className="mt-1 text-sm font-semibold">{actionLabels[next] || 'Delivery complete'}</p><button disabled={busy || !next || (next === 'Delivered' && order.payment_type === 'COD' && payment?.status !== 'PAID')} onClick={() => onAdvance(order)} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-50">{busy ? 'Saving GPS…' : actionLabels[next] || 'Delivered'}<ApperIcon name="MapPin" /></button>{next === 'Delivered' && order.payment_type === 'COD' && payment?.status !== 'PAID' && <p className="mt-2 text-center text-xs font-semibold text-destructive">Mark the COD amount received before completing delivery.</p>}</div></article>;
 }
 
 function Info({ title, text }) { return <div className="rounded-2xl bg-muted p-4"><strong className="text-sm">{title}</strong><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{text}</p></div>; }
