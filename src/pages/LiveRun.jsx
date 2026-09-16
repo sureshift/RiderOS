@@ -1,16 +1,19 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
-import { insert, update } from '@/services/localDb';
+import { insert, query, update } from '@/services/localDb';
 
 export const route = { path: '/live-run', layout: 'owner', access: 'public' };
 export const nav = { icon: 'Route', label: 'Live run', section: 'Operations', order: 2 };
 
-const PHASES = ['Accepted', 'To Pickup', 'Arrived Pickup', 'Picked Up', 'To Drop', 'Delivered'];
+const PHASES = ['Allocated', 'En Route Pickup', 'Arrived Pickup', 'Picked Up', 'En Route Customer', 'Arrived Customer', 'Delivered'];
+const TRACKING_INTERVAL_MS = 30000;
 
 export default function LiveRun() {
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
+  const [trackingState, setTrackingState] = useState({ active: false, lastCapturedAt: null, error: '' });
+  const trackingOrderRef = useRef(null);
   const { data: orders, loading, error, run } = useLocalQuery(
     `SELECT o.*, p.name AS platform_name, pl.name AS pickup_name
      FROM orders o
@@ -24,11 +27,55 @@ export default function LiveRun() {
   const active = orders ?? [];
   const current = useMemo(() => active.find(order => order.status !== 'Issue'), [active]);
 
+  useEffect(() => {
+    trackingOrderRef.current = current?.id ?? null;
+  }, [current?.id]);
+
+  useEffect(() => {
+    if (!current) {
+      setTrackingState({ active: false, lastCapturedAt: null, error: '' });
+      return undefined;
+    }
+
+    let cancelled = false;
+    let timer;
+
+    async function captureTrackingPoint() {
+      try {
+        const location = await captureLocation();
+        const capturedAt = new Date().toISOString();
+        const orderId = trackingOrderRef.current;
+        if (!orderId || cancelled) return;
+        await insert('gps_events', {
+          order_id: orderId,
+          trip_id: null,
+          event_type: 'tracking',
+          latitude: location.latitude,
+          longitude: location.longitude,
+          accuracy_m: location.accuracy,
+          captured_at: capturedAt,
+          source: location.source
+        }, 'gps');
+        const distance = await calculateOrderDistance(orderId);
+        await update('orders', orderId, { distance_km: Number(distance.toFixed(3)) });
+        if (!cancelled) setTrackingState({ active: true, lastCapturedAt: capturedAt, error: '' });
+      } catch (err) {
+        if (!cancelled) setTrackingState(state => ({ ...state, active: false, error: err.message || 'GPS tracking is unavailable.' }));
+      }
+    }
+
+    captureTrackingPoint();
+    timer = window.setInterval(captureTrackingPoint, TRACKING_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [current?.id]);
+
   async function advance(order) {
     const index = PHASES.indexOf(order.status);
     if (index < 0 || index >= PHASES.length - 1) return;
-    const next = PHASES[index + 1];
-    await transition(order, next);
+    await transition(order, PHASES[index + 1]);
   }
 
   async function transition(order, nextStatus) {
@@ -36,7 +83,15 @@ export default function LiveRun() {
     setNotice('');
     try {
       const location = await captureLocation();
-      const eventType = nextStatus === 'Arrived Pickup' ? 'arrived_pickup' : nextStatus === 'Picked Up' ? 'pickup' : nextStatus === 'Delivered' ? 'drop' : 'status';
+      const capturedAt = new Date().toISOString();
+      const eventType = {
+        'En Route Pickup': 'en_route_pickup',
+        'Arrived Pickup': 'arrived_pickup',
+        'Picked Up': 'picked_up',
+        'En Route Customer': 'en_route_customer',
+        'Arrived Customer': 'arrived_customer',
+        Delivered: 'delivered'
+      }[nextStatus] || 'milestone';
       await insert('gps_events', {
         order_id: order.id,
         trip_id: null,
@@ -44,14 +99,27 @@ export default function LiveRun() {
         latitude: location.latitude,
         longitude: location.longitude,
         accuracy_m: location.accuracy,
-        captured_at: new Date().toISOString(),
+        captured_at: capturedAt,
         source: location.source
       }, 'gps');
+
       const fields = { status: nextStatus };
-      if (nextStatus === 'Picked Up') fields.picked_up_at = new Date().toISOString();
-      if (nextStatus === 'Delivered') fields.delivered_at = new Date().toISOString();
+      if (nextStatus === 'Arrived Pickup') fields.arrived_pickup_at = capturedAt;
+      if (nextStatus === 'Picked Up') fields.picked_up_at = capturedAt;
+      if (nextStatus === 'Arrived Customer') {
+        fields.arrived_customer_at = capturedAt;
+        fields.drop_latitude = location.latitude;
+        fields.drop_longitude = location.longitude;
+      }
+      if (nextStatus === 'Delivered') {
+        fields.delivered_at = capturedAt;
+        fields.drop_latitude = location.latitude;
+        fields.drop_longitude = location.longitude;
+        fields.duration_min = Number(((new Date(capturedAt) - new Date(order.accepted_at)) / 60000).toFixed(2));
+        fields.distance_km = Number((await calculateOrderDistance(order.id)).toFixed(3));
+      }
       await update('orders', order.id, fields);
-      setNotice(`${order.code}: ${nextStatus}. GPS point saved.`);
+      setNotice(`${order.code}: ${nextStatus}. GPS milestone saved.`);
       await run();
     } catch (err) {
       setNotice(err.message || 'Could not capture the milestone.');
@@ -61,9 +129,9 @@ export default function LiveRun() {
   }
 
   return <div className="space-y-6">
-    <header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Live operations</p><h1 className="font-heading text-5xl font-bold">Live run</h1><p className="mt-2 text-muted-foreground">Advance deliveries and capture a real GPS event at every important milestone.</p></div><div className="rounded-2xl bg-secondary px-4 py-3 text-secondary-foreground"><strong className="font-heading text-3xl">{active.length}</strong><span className="ml-2 text-sm">open orders</span></div></header>
+    <header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Live operations</p><h1 className="font-heading text-5xl font-bold">Live run</h1><p className="mt-2 text-muted-foreground">Follow the delivery in order. Rider GPS is captured at milestones and every 30 seconds while an order is active.</p></div><div className="rounded-2xl bg-secondary px-4 py-3 text-secondary-foreground"><strong className="font-heading text-3xl">{active.length}</strong><span className="ml-2 text-sm">open orders</span></div></header>
     <section className="grid gap-4 md:grid-cols-[1.2fr_.8fr]">
-      <div className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground"><ApperIcon name="MapPinned" /></span><div><h2 className="font-heading text-2xl font-bold">Milestone GPS</h2><p className="text-sm text-muted-foreground">Location is requested only when you advance a delivery.</p></div></div><div className="grid gap-3 sm:grid-cols-3"><Info title="Accept" text="Order becomes active" /><Info title="Pickup" text="Arrival and pickup points" /><Info title="Drop" text="Final delivery point" /></div></div>
+      <div className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground"><ApperIcon name="MapPinned" /></span><div><h2 className="font-heading text-2xl font-bold">Live GPS tracking</h2><p className="text-sm text-muted-foreground">The app records a route point immediately, then every 30 seconds while the active delivery is open.</p></div></div><div className="grid gap-3 sm:grid-cols-3"><Info title="Tracking" text={trackingState.active ? `Last point ${formatElapsedSince(trackingState.lastCapturedAt)}` : trackingState.error || 'Waiting for GPS permission'} /><Info title="Distance" text={current ? `${Number(current.distance_km || 0).toFixed(2)} km recorded` : 'No active order'} /><Info title="Allocation timer" text={current ? `${formatDuration((Date.now() - new Date(current.accepted_at).getTime()) / 60000)} since allocation` : 'No active order'} /></div></div>
       <div className="rounded-3xl border border-border bg-muted p-5"><p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Current focus</p><h2 className="mt-2 font-heading text-3xl font-bold">{current?.code ?? 'No active order'}</h2><p className="mt-1 text-sm text-muted-foreground">{current ? `${current.platform_name || 'Platform'} · ${current.status}` : 'Add an order to begin a run.'}</p></div>
     </section>
     {notice && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{notice}</div>}
@@ -71,12 +139,45 @@ export default function LiveRun() {
   </div>;
 }
 
-function RunCard({ order, busy, onAdvance, onSetStatus }) {
+function RunCard({ order, busy, onAdvance }) {
   const index = PHASES.indexOf(order.status);
-  return <article className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-start justify-between gap-3"><div><span className="mb-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground">{order.platform_name || 'Platform'}</span><h2 className="font-heading text-3xl font-bold">{order.code}</h2><p className="text-sm text-muted-foreground">{order.drop_address || 'No destination saved'}</p></div><strong className="text-lg tabular-nums">₹{Number(order.earning || 0).toFixed(0)}</strong></div><div className="mb-6 space-y-2">{PHASES.map((phase, step) => <div key={phase} className="flex items-center gap-3"><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${step < index ? 'bg-success text-success-foreground' : step === index ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{step < index ? <ApperIcon name="Check" /> : step + 1}</span><span className={step === index ? 'font-bold' : 'text-sm text-muted-foreground'}>{phase}</span>{step === index && <span className="ml-auto text-xs font-bold text-primary">CURRENT</span>}</div>)}</div><div className="grid gap-2 sm:grid-cols-2"><button disabled={busy || index >= PHASES.length - 1} onClick={() => onAdvance(order)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">{busy ? 'Capturing GPS…' : index === PHASES.length - 2 ? 'Capture drop & deliver' : `Capture ${PHASES[index + 1]}`}<ApperIcon name="MapPin" /></button><select value={order.status} disabled={busy} onChange={event => onSetStatus(order, event.target.value)} className="rounded-xl border border-input bg-background px-3 py-3 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{PHASES.map(phase => <option key={phase}>{phase}</option>)}</select></div></article>;
+  const next = PHASES[index + 1];
+  const actionLabels = {
+    'En Route Pickup': 'Start pickup trip',
+    'Arrived Pickup': 'Mark arrived at pickup',
+    'Picked Up': 'Mark picked up',
+    'En Route Customer': 'Start customer trip',
+    'Arrived Customer': 'Mark arrived at customer',
+    Delivered: 'Mark delivered'
+  };
+  const elapsed = order.delivered_at
+    ? Number(order.duration_min || 0)
+    : (Date.now() - new Date(order.accepted_at).getTime()) / 60000;
+
+  return <article className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-start justify-between gap-3"><div className="min-w-0"><span className="mb-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground">{order.platform_name || 'Platform'}</span><h2 className="font-heading text-3xl font-bold">{order.code}</h2><p className="text-sm text-muted-foreground">Pickup: {order.pickup_name || order.pickup_address || 'Not assigned'}</p><p className="truncate text-sm text-muted-foreground" title={order.drop_address || ''}>Customer: {order.drop_address || 'No destination saved'}</p></div><strong className="shrink-0 text-lg tabular-nums">₹{Number(order.earning || 0).toFixed(0)}</strong></div><div className="mb-5 grid gap-3 sm:grid-cols-3"><MiniMetric label="Distance" value={`${Number(order.distance_km || 0).toFixed(2)} km`} /><MiniMetric label="Run time" value={formatDuration(elapsed)} /><MiniMetric label="Pickup GPS" value={order.pickup_latitude != null ? 'Saved' : 'Missing'} /></div><div className="mb-6 space-y-2">{PHASES.map((phase, step) => <div key={phase} className="flex items-center gap-3"><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${step < index ? 'bg-success text-success-foreground' : step === index ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{step < index ? <ApperIcon name="Check" /> : step + 1}</span><span className={step === index ? 'font-bold' : 'text-sm text-muted-foreground'}>{phase}</span>{step === index && <span className="ml-auto text-xs font-bold text-primary">CURRENT</span>}</div>)}</div><div className="rounded-2xl bg-muted p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next rider action</p><p className="mt-1 text-sm font-semibold">{actionLabels[next] || 'Delivery complete'}</p><button disabled={busy || !next} onClick={() => onAdvance(order)} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-50">{busy ? 'Saving GPS…' : actionLabels[next] || 'Delivered'}<ApperIcon name="MapPin" /></button></div></article>;
 }
 
 function Info({ title, text }) { return <div className="rounded-2xl bg-muted p-4"><strong className="text-sm">{title}</strong><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{text}</p></div>; }
+function MiniMetric({ label, value }) { return <div className="rounded-xl border border-border bg-background p-3"><span className="block text-xs text-muted-foreground">{label}</span><strong className="mt-1 block text-sm tabular-nums">{value}</strong></div>; }
+function formatDuration(minutes) { const total = Math.max(0, Math.round(Number(minutes) || 0)); const hours = Math.floor(total / 60); const mins = total % 60; return hours ? `${hours}h ${String(mins).padStart(2, '0')}m` : `${mins}m`; }
+function formatElapsedSince(iso) { if (!iso) return 'waiting'; return formatDuration((Date.now() - new Date(iso).getTime()) / 60000) + ' ago'; }
+
+async function calculateOrderDistance(orderId) {
+  const points = await query('SELECT latitude, longitude FROM gps_events WHERE order_id = ? ORDER BY captured_at ASC', [orderId]);
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    total += haversineKm(Number(points[index - 1].latitude), Number(points[index - 1].longitude), Number(points[index].latitude), Number(points[index].longitude));
+  }
+  return total;
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const radians = value => value * Math.PI / 180;
+  const dLat = radians(lat2 - lat1);
+  const dLon = radians(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 function captureLocation() {
   if (!navigator.geolocation) return Promise.reject(new Error('This device does not expose GPS location.'));
