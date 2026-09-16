@@ -39,7 +39,7 @@ function DeliveryHeatmap({ orders, gpsEvents }) {
     (gpsEvents ?? []).forEach(event => {
       const lat = Number(event.latitude);
       const lng = Number(event.longitude);
-      if (!event.order_id || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      if (!event.order_id || !isValidCoordinate(lat, lng)) return;
       if (!gpsByOrder.has(event.order_id)) gpsByOrder.set(event.order_id, []);
       gpsByOrder.get(event.order_id).push({ lat, lng, type: String(event.event_type || '').toLowerCase() });
     });
@@ -47,9 +47,9 @@ function DeliveryHeatmap({ orders, gpsEvents }) {
     return (orders ?? []).map(order => {
       const lat = Number(order.drop_latitude);
       const lng = Number(order.drop_longitude);
-      if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng, code: order.code };
+      if (isValidCoordinate(lat, lng)) return { lat, lng, code: order.code };
       const events = gpsByOrder.get(order.id) ?? [];
-      const delivery = events.find(point => /drop|deliver/.test(point.type)) ?? events[0];
+      const delivery = events.find(point => /drop|deliver/.test(point.type));
       return delivery ? { lat: delivery.lat, lng: delivery.lng, code: order.code } : null;
     }).filter(Boolean);
   }, [orders, gpsEvents]);
@@ -57,7 +57,7 @@ function DeliveryHeatmap({ orders, gpsEvents }) {
   const clusters = useMemo(() => buildHeatClusters(points), [points]);
   const maxCount = Math.max(1, ...clusters.map(cluster => cluster.count));
   const center = useMemo(() => {
-    if (!points.length) return [28.6139, 77.2090];
+    if (!points.length) return null;
     return [points.reduce((sum, point) => sum + point.lat, 0) / points.length, points.reduce((sum, point) => sum + point.lng, 0) / points.length];
   }, [points]);
 
@@ -101,7 +101,7 @@ function HeatmapViewport({ points }) {
   return null;
 }
 
-function buildHeatClusters(points) {
+function isValidCoordinate(lat, lng) {\n  return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);\n}\n\nfunction buildHeatClusters(points) {
   if (!points.length) return [];
   const minLat = Math.min(...points.map(point => point.lat));
   const maxLat = Math.max(...points.map(point => point.lat));
