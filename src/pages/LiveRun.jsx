@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
-import { useFunction } from '@/hooks/useFunction';
 import { insert, query, update } from '@/services/localDb';
 
 const SLICE_KEY = 'rideros.slice.account';
@@ -34,6 +33,22 @@ export default function LiveRun() {
   const current = useMemo(() => active.find(order => order.status !== 'Issue'), [active]);
   const { data: paymentRows, run: runPayments } = useLocalQuery('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [current?.id ?? ''], [current?.id]);
   const currentPayment = paymentRows?.[0];
+
+  useEffect(() => {
+    if (!current || current.payment_type !== 'COD' || currentPayment?.status === 'PAID') {
+      setUpiPayload(null);
+      return;
+    }
+    const amount = Number(current.cod_amount || 0);
+    const stored = localStorage.getItem(SLICE_KEY);
+    const account = stored ? JSON.parse(stored) : null;
+    if (!amount || !account?.vpa) {
+      setUpiPayload(null);
+      return;
+    }
+    const paymentUri = `upi://pay?${new URLSearchParams({ pa: account.vpa, pn: account.payee || 'Delivery', am: amount.toFixed(2), cu: 'INR', tn: `COD ${current.code}` }).toString()}`;
+    setUpiPayload({ paymentUri, amount, vpa: account.vpa, payee: account.payee || 'Delivery' });
+  }, [current?.id, current?.payment_type, current?.cod_amount, currentPayment?.status]);
 
   useEffect(() => {
     trackingOrderRef.current = current?.id ?? null;
