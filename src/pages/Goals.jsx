@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
 import { insert, remove, update } from '@/services/localDb';
@@ -14,9 +14,17 @@ export default function Goals() {
   const [message, setMessage] = useState('');
   const [form, setForm] = useState(emptyForm());
   const { data: goals, loading, error, run } = useLocalQuery('SELECT * FROM goals ORDER BY created_at DESC', [], []);
+  const { data: deliveredOrders } = useLocalQuery("SELECT earning, delivered_at, created_at FROM orders WHERE status = 'Delivered'", [], []);
+  const { data: activeOrders } = useLocalQuery("SELECT id FROM orders WHERE status NOT IN ('Delivered','Cancelled')", [], []);
+  const { data: riders } = useLocalQuery('SELECT id FROM riders WHERE active = 1', [], []);
   const rows = goals ?? [];
+  const delivered = deliveredOrders ?? [];
+  const openOrders = activeOrders ?? [];
+  const activeRiders = riders ?? [];
   const saved = rows.reduce((sum, goal) => sum + Number(goal.saved || 0), 0);
   const target = rows.reduce((sum, goal) => sum + Number(goal.target || 0), 0);
+  const orderIntensity = getOrderIntensity(openOrders.length, activeRiders.length);
+  const goalMetrics = useMemo(() => rows.map(goal => getGoalMetrics(goal, delivered)), [rows, delivered]);
 
   function create() { setEditing(null); setForm(emptyForm()); setOpen(true); }
   function edit(goal) { setEditing(goal); setForm({ name: goal.name, target: goal.target, saved: goal.saved, deadline: goal.deadline ?? '', rule: goal.rule, rule_value: goal.rule_value, active: Boolean(goal.active) }); setOpen(true); }
@@ -43,5 +51,38 @@ export default function Goals() {
 
 function emptyForm() { return { name: '', target: '', saved: '0', deadline: '', rule: 'Percent of earnings', rule_value: '10', active: true }; }
 function Stat({ label, value }) { return <div className="rounded-3xl border border-border bg-card p-5"><p className="text-sm text-muted-foreground">{label}</p><strong className="mt-2 block font-heading text-4xl tabular-nums">{value}</strong></div>; }
+function GoalMetric({ label, value }) { return <div className="rounded-2xl bg-muted p-3"><span className="block text-xs text-muted-foreground">{label}</span><strong className="mt-1 block text-sm tabular-nums">{value}</strong></div>; }
 function Field({ label, value, onChange, type = 'text', min, step, required }) { return <label className="text-sm font-semibold">{label}<input required={required} type={type} min={min} step={step} value={value} onChange={event => onChange(event.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>; }
 function Select({ label, value, options, onChange }) { return <label className="text-sm font-semibold">{label}<select value={value} onChange={event => onChange(event.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{options.map(option => <option key={option}>{option}</option>)}</select></label>; }
+
+function getGoalMetrics(goal, deliveredOrders) {
+  const target = Number(goal.target || 0);
+  const saved = Number(goal.saved || 0);
+  const start = new Date(goal.created_at || new Date().toISOString());
+  const deadline = goal.deadline ? new Date(`${goal.deadline}T23:59:59`) : null;
+  const now = new Date();
+  const goalEarnings = deliveredOrders.reduce((sum, order) => {
+    const deliveredAt = new Date(order.delivered_at || order.created_at);
+    return deliveredAt >= start && (!deadline || deliveredAt <= deadline) ? sum + Number(order.earning || 0) : sum;
+  }, 0);
+  const progress = saved + goalEarnings;
+  const remaining = Math.max(0, target - progress);
+  const daysRemaining = deadline ? Math.max(1, Math.ceil((deadline.getTime() - now.getTime()) / 86400000)) : 1;
+  const daysElapsed = Math.max(1, Math.ceil((now.getTime() - start.getTime()) / 86400000));
+  const totalDays = Math.max(1, daysElapsed + daysRemaining);
+  const expectedProgress = Math.min(target, target * daysElapsed / totalDays);
+  const shortfall = Math.max(0, expectedProgress - progress);
+  const adjustedRemaining = remaining + shortfall;
+  const todayTarget = Math.ceil(adjustedRemaining / daysRemaining);
+  const hoursRemaining = Math.max(1, 12 - now.getHours());
+  return { id: goal.id, todayTarget, hourlyTarget: Math.ceil(todayTarget / hoursRemaining), shortfall, daysRemaining };
+}
+
+function getOrderIntensity(openOrderCount, riderCount) {
+  if (!riderCount) return { label: openOrderCount ? 'High' : 'Low', multiplier: openOrderCount ? 3 : 0.5 };
+  const ratio = openOrderCount / riderCount;
+  if (ratio > 3.5) return { label: 'Very High', multiplier: 1.4 };
+  if (ratio > 2) return { label: 'High', multiplier: 1.2 };
+  if (ratio >= 1) return { label: 'Normal', multiplier: 1 };
+  return { label: 'Low', multiplier: 0.8 };
+}
