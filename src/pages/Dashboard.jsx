@@ -2,6 +2,8 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
+import { CircleMarker, MapContainer, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
 
 export const route = { path: '/dashboard', layout: 'owner', access: 'public' };
 export const nav = { icon: 'Gauge', label: 'Cockpit', section: 'Operations', order: 1 };
@@ -54,6 +56,10 @@ function DeliveryHeatmap({ orders, gpsEvents }) {
 
   const clusters = useMemo(() => buildHeatClusters(points), [points]);
   const maxCount = Math.max(1, ...clusters.map(cluster => cluster.count));
+  const center = useMemo(() => {
+    if (!points.length) return [28.6139, 77.2090];
+    return [points.reduce((sum, point) => sum + point.lat, 0) / points.length, points.reduce((sum, point) => sum + point.lng, 0) / points.length];
+  }, [points]);
 
   return <section className="overflow-hidden rounded-2xl border border-border bg-card">
     <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border px-5 py-4">
@@ -66,21 +72,33 @@ function DeliveryHeatmap({ orders, gpsEvents }) {
     </div>
     {clusters.length === 0 ? <div className="grid min-h-72 place-items-center bg-muted/30 px-6 py-10 text-center">
       <div><ApperIcon name="Map" className="mx-auto mb-3 h-8 w-8 text-muted-foreground" /><p className="text-sm font-semibold">Not enough location history yet</p><p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">The heatmap becomes active as delivered orders or GPS milestones contain latitude and longitude. It never invents demand from an address alone.</p></div>
-    </div> : <div className="relative min-h-80 overflow-hidden bg-muted/30 p-4 md:min-h-96">
-      <div className="absolute inset-0 opacity-40" style={{ backgroundImage: 'linear-gradient(to right, hsl(var(--border)) 1px, transparent 1px), linear-gradient(to bottom, hsl(var(--border)) 1px, transparent 1px)', backgroundSize: '48px 48px' }} />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,hsl(var(--primary)/.06),transparent_62%)]" />
-      {clusters.map(cluster => {
-        const intensity = cluster.count / maxCount;
-        const size = 42 + intensity * 72;
-        return <div key={`${cluster.x}-${cluster.y}`} title={`${cluster.count} order${cluster.count === 1 ? '' : 's'} in this area`} className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border border-primary/20 bg-primary/10" style={{ left: `${cluster.x}%`, top: `${cluster.y}%`, width: `${size}px`, height: `${size}px` }}>
-          <div className="absolute inset-[24%] rounded-full bg-primary/20" />
-          <div className="absolute inset-[42%] rounded-full bg-primary" />
-        </div>;
-      })}
+    </div> : <div className="relative min-h-80 overflow-hidden md:min-h-96">
+      <MapContainer center={center} zoom={12} scrollWheelZoom className="h-80 w-full md:h-96">
+        <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+        <HeatmapViewport points={points} />
+        {clusters.map(cluster => <CircleMarker key={`zone-${cluster.lat}-${cluster.lng}`} center={[cluster.lat, cluster.lng]} radius={18 + (cluster.count / maxCount) * 28} pathOptions={{ color: 'var(--primary)', fillColor: 'var(--primary)', fillOpacity: 0.12, weight: 1 }}>
+          <Tooltip>{cluster.count} order{cluster.count === 1 ? '' : 's'} in this demand zone</Tooltip>
+        </CircleMarker>)}
+        {clusters.map(cluster => <CircleMarker key={`core-${cluster.lat}-${cluster.lng}`} center={[cluster.lat, cluster.lng]} radius={7 + (cluster.count / maxCount) * 9} pathOptions={{ color: 'var(--primary)', fillColor: 'var(--primary)', fillOpacity: 0.42, weight: 0 }} />)}
+        {points.map((point, index) => <CircleMarker key={`${point.code}-${index}`} center={[point.lat, point.lng]} radius={4} pathOptions={{ color: 'var(--primary)', fillColor: 'var(--primary)', fillOpacity: 0.7, weight: 1 }}><Tooltip>{point.code}</Tooltip></CircleMarker>)}
+      </MapContainer>
       <div className="absolute bottom-4 left-4 rounded-xl border border-border bg-card/95 px-3 py-2 shadow-(--shadow-sm)"><p className="text-xs font-semibold">{points.length} geolocated deliveries</p><p className="text-[11px] text-muted-foreground">{clusters.length} demand zones · peak {maxCount} orders</p></div>
       <div className="absolute right-4 top-4 rounded-xl border border-border bg-card/95 px-3 py-2 text-[11px] text-muted-foreground shadow-(--shadow-sm)"><span>Cool</span><span className="mx-2 inline-block h-1.5 w-16 rounded-full bg-primary/20 align-middle" /><span>Peak</span></div>
     </div>}
   </section>;
+}
+
+function HeatmapViewport({ points }) {
+  const map = useMap();
+  useMemo(() => {
+    if (!points.length) return;
+    if (points.length === 1) {
+      map.setView([points[0].lat, points[0].lng], 13);
+      return;
+    }
+    map.fitBounds(points.map(point => [point.lat, point.lng]), { padding: [32, 32], maxZoom: 14 });
+  }, [map, points]);
+  return null;
 }
 
 function buildHeatClusters(points) {
@@ -104,8 +122,8 @@ function buildHeatClusters(points) {
 
   return Array.from(buckets.values()).map(bucket => ({
     count: bucket.count,
-    x: ((bucket.gx + 0.5) / 8) * 100,
-    y: ((bucket.gy + 0.5) / 6) * 100
+    lat: maxLat - ((bucket.gy + 0.5) / 6) * latSpan,
+    lng: minLng + ((bucket.gx + 0.5) / 8) * lngSpan
   }));
 }
 

@@ -3,6 +3,7 @@
 @import 'tailwindcss' source(none);
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
+@import 'leaflet/dist/leaflet.css';
 
 @source "../src";
 
@@ -83,6 +84,11 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+  }
+
+  .leaflet-container {
+    z-index: 0;
+    font-family: inherit;
   }
 }
 
