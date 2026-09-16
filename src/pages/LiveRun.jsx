@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
+import { useFunction } from '@/hooks/useFunction';
 import { insert, query, update } from '@/services/localDb';
 
 export const route = { path: '/live-run', layout: 'owner', access: 'public' };
@@ -13,7 +14,10 @@ export default function LiveRun() {
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
   const [trackingState, setTrackingState] = useState({ active: false, lastCapturedAt: null, error: '' });
+  const [paymentNotice, setPaymentNotice] = useState('');
+  const [upiPayload, setUpiPayload] = useState(null);
   const trackingOrderRef = useRef(null);
+  const sliceQr = useFunction(import.meta.env.VITE_SLICE_COD_QR, { showError: false });
   const { data: orders, loading, error, run } = useLocalQuery(
     `SELECT o.*, p.name AS platform_name, pl.name AS pickup_name
      FROM orders o
@@ -26,6 +30,8 @@ export default function LiveRun() {
   );
   const active = orders ?? [];
   const current = useMemo(() => active.find(order => order.status !== 'Issue'), [active]);
+  const { data: paymentRows, run: runPayments } = useLocalQuery('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [current?.id ?? ''], [current?.id]);
+  const currentPayment = paymentRows?.[0];
 
   useEffect(() => {
     trackingOrderRef.current = current?.id ?? null;
@@ -85,6 +91,10 @@ export default function LiveRun() {
     setBusy(order.id);
     setNotice('');
     try {
+      if (nextStatus === 'Delivered' && order.payment_type === 'COD' && (!currentPayment || currentPayment.status !== 'PAID')) {
+        setPaymentNotice(`Collect ₹${Number(order.cod_amount || 0).toFixed(2)} before marking ${order.code} delivered.`);
+        return;
+      }
       const location = await captureLocation();
       const capturedAt = new Date().toISOString();
       const eventType = {
@@ -131,6 +141,39 @@ export default function LiveRun() {
     }
   }
 
+  async function collectCash(order) {
+    if (order.payment_type !== 'COD') return;
+    const amount = Number(order.cod_amount || 0);
+    if (!amount) return setPaymentNotice('COD amount is missing on this order.');
+    await insert('payments', { order_id: order.id, amount, method: 'cash', status: 'PAID', paid_at: new Date().toISOString(), notes: 'Cash collected by rider' }, 'pay');
+    setPaymentNotice(`Cash ₹${amount.toFixed(2)} recorded as collected.`);
+    await runPayments();
+  }
+
+  async function createUpiQr(order) {
+    if (order.payment_type !== 'COD') return;
+    const amount = Number(order.cod_amount || 0);
+    if (!amount) return setPaymentNotice('COD amount is missing on this order.');
+    setPaymentNotice('Creating Slice UPI payment request…');
+    const result = await sliceQr.invoke({ amount, clientReferenceId: `COD-${order.code}-${Date.now()}` });
+    if (!result) {
+      setPaymentNotice('Slice QR could not be created. Configure SLICE_API_KEY on the server function.');
+      return;
+    }
+    setUpiPayload(result);
+    setPaymentNotice('Ask the customer to complete the UPI payment, then confirm the successful payment below.');
+  }
+
+  async function confirmUpiPaid(order) {
+    const amount = Number(order.cod_amount || 0);
+    const reference = window.prompt('Enter the UPI transaction / UTR reference after confirming the payment:');
+    if (!reference?.trim()) return;
+    await insert('payments', { order_id: order.id, amount, method: 'upi', status: 'PAID', upi_reference: reference.trim(), paid_at: new Date().toISOString(), notes: 'UPI payment confirmed by rider' }, 'pay');
+    setUpiPayload(null);
+    setPaymentNotice(`UPI ₹${amount.toFixed(2)} recorded. Reference: ${reference.trim()}`);
+    await runPayments();
+  }
+
   return <div className="space-y-6">
     <header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Live operations</p><h1 className="font-heading text-5xl font-bold">Live run</h1><p className="mt-2 text-muted-foreground">Follow the delivery in order. Rider GPS is captured at milestones and every 30 seconds while an order is active.</p></div><div className="rounded-2xl bg-secondary px-4 py-3 text-secondary-foreground"><strong className="font-heading text-3xl">{active.length}</strong><span className="ml-2 text-sm">open orders</span></div></header>
     <section className="grid gap-4 md:grid-cols-[1.2fr_.8fr]">
@@ -138,6 +181,7 @@ export default function LiveRun() {
       <div className="rounded-3xl border border-border bg-muted p-5"><p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Current focus</p><h2 className="mt-2 font-heading text-3xl font-bold">{current?.code ?? 'No active order'}</h2><p className="mt-1 text-sm text-muted-foreground">{current ? `${current.platform_name || 'Platform'} · ${current.status}` : 'Add an order to begin a run.'}</p></div>
     </section>
     {notice && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{notice}</div>}
+    {current?.payment_type === 'COD' && <section className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wide text-primary">COD collection</p><h2 className="mt-1 font-heading text-3xl font-bold">Collect ₹{Number(current.cod_amount || 0).toFixed(2)}</h2><p className="mt-1 text-sm text-muted-foreground">Record the payment before completing delivery.</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${currentPayment?.status === 'PAID' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{currentPayment?.status === 'PAID' ? 'PAID' : 'PAYMENT DUE'}</span></div><div className="mt-4 grid gap-2 sm:grid-cols-3"><button onClick={() => collectCash(current)} disabled={currentPayment?.status === 'PAID'} className="rounded-xl bg-foreground px-4 py-3 font-bold text-background disabled:opacity-50"><ApperIcon name="Banknote" className="mr-2 inline h-4 w-4" />Collect cash</button><button onClick={() => createUpiQr(current)} disabled={currentPayment?.status === 'PAID' || sliceQr.loading} className="rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50"><ApperIcon name="QrCode" className="mr-2 inline h-4 w-4" />{sliceQr.loading ? 'Creating QR…' : 'Collect by UPI'}</button><button onClick={() => confirmUpiPaid(current)} disabled={currentPayment?.status === 'PAID'} className="rounded-xl border border-border px-4 py-3 font-bold disabled:opacity-50">Confirm UPI paid</button></div>{upiPayload && <div className="mt-4 rounded-2xl bg-muted p-4"><p className="text-sm font-bold">Slice payment request created</p><pre className="mt-3 max-h-48 overflow-auto rounded-xl bg-background p-3 text-[10px]">{JSON.stringify(upiPayload, null, 2)}</pre></div>}{paymentNotice && <p className="mt-3 text-sm font-semibold text-muted-foreground">{paymentNotice}</p>}</section>}
     {loading ? <div className="grid gap-5 xl:grid-cols-2">{[1, 2].map(item => <div key={item} className="h-80 animate-pulse rounded-3xl bg-muted" />)}</div> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-destructive">{error.message}<button onClick={run} className="ml-3 underline">Retry</button></div> : active.length === 0 ? <div className="grid justify-items-center rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="Route" className="mb-3 text-muted-foreground" /><h2 className="font-heading text-3xl font-bold">Run is clear</h2><p className="mt-2 max-w-md text-sm text-muted-foreground">There are no open deliveries. Add an order, then return here to capture its journey.</p></div> : <div className="grid gap-5 xl:grid-cols-2">{active.map(order => <RunCard key={order.id} order={order} busy={busy === order.id} onAdvance={advance} />)}</div>}
   </div>;
 }
@@ -157,7 +201,7 @@ function RunCard({ order, busy, onAdvance }) {
     ? Number(order.duration_min || 0)
     : (Date.now() - new Date(order.accepted_at).getTime()) / 60000;
 
-  return <article className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-start justify-between gap-3"><div className="min-w-0"><span className="mb-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground">{order.platform_name || 'Platform'}</span><h2 className="font-heading text-3xl font-bold">{order.code}</h2><p className="text-sm text-muted-foreground">Pickup: {order.pickup_name || order.pickup_address || 'Not assigned'}</p><p className="truncate text-sm text-muted-foreground" title={order.drop_address || ''}>Customer: {order.drop_address || 'No destination saved'}</p></div><strong className="shrink-0 text-lg tabular-nums">₹{Number(order.earning || 0).toFixed(0)}</strong></div><div className="mb-5 grid gap-3 sm:grid-cols-3"><MiniMetric label="Distance" value={`${Number(order.distance_km || 0).toFixed(2)} km`} /><MiniMetric label="Run time" value={formatDuration(elapsed)} /><MiniMetric label="Pickup GPS" value={order.pickup_latitude != null ? 'Saved' : 'Missing'} /></div><div className="mb-6 space-y-2">{PHASES.map((phase, step) => <div key={phase} className="flex items-center gap-3"><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${step < index ? 'bg-success text-success-foreground' : step === index ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{step < index ? <ApperIcon name="Check" /> : step + 1}</span><span className={step === index ? 'font-bold' : 'text-sm text-muted-foreground'}>{phase}</span>{step === index && <span className="ml-auto text-xs font-bold text-primary">CURRENT</span>}</div>)}</div><div className="rounded-2xl bg-muted p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next rider action</p><p className="mt-1 text-sm font-semibold">{actionLabels[next] || 'Delivery complete'}</p><button disabled={busy || !next} onClick={() => onAdvance(order)} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-50">{busy ? 'Saving GPS…' : actionLabels[next] || 'Delivered'}<ApperIcon name="MapPin" /></button></div></article>;
+  return <article className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-start justify-between gap-3"><div className="min-w-0"><span className="mb-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground">{order.platform_name || 'Platform'}</span><h2 className="font-heading text-3xl font-bold">{order.code}</h2><p className="text-sm text-muted-foreground">Pickup: {order.pickup_name || order.pickup_address || 'Not assigned'}</p><p className="truncate text-sm text-muted-foreground" title={order.drop_address || ''}>Customer: {order.drop_address || 'No destination saved'}</p></div><strong className="shrink-0 text-lg tabular-nums">₹{Number(order.earning || 0).toFixed(0)}</strong></div><div className="mb-5 grid gap-3 sm:grid-cols-3"><MiniMetric label="Distance" value={`${Number(order.distance_km || 0).toFixed(2)} km`} /><MiniMetric label="Run time" value={formatDuration(elapsed)} /><MiniMetric label="Payment" value={order.payment_type === 'COD' ? `COD ₹${Number(order.cod_amount || 0).toFixed(0)}` : 'Prepaid'} /></div><div className="mb-6 space-y-2">{PHASES.map((phase, step) => <div key={phase} className="flex items-center gap-3"><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${step < index ? 'bg-success text-success-foreground' : step === index ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{step < index ? <ApperIcon name="Check" /> : step + 1}</span><span className={step === index ? 'font-bold' : 'text-sm text-muted-foreground'}>{phase}</span>{step === index && <span className="ml-auto text-xs font-bold text-primary">CURRENT</span>}</div>)}</div><div className="rounded-2xl bg-muted p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next rider action</p><p className="mt-1 text-sm font-semibold">{actionLabels[next] || 'Delivery complete'}</p><button disabled={busy || !next || (next === 'Delivered' && order.payment_type === 'COD' && (!currentPayment || currentPayment.status !== 'PAID'))} onClick={() => onAdvance(order)} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-50">{busy ? 'Saving GPS…' : actionLabels[next] || 'Delivered'}<ApperIcon name="MapPin" /></button>{next === 'Delivered' && order.payment_type === 'COD' && (!currentPayment || currentPayment.status !== 'PAID') && <p className="mt-2 text-center text-xs font-semibold text-destructive">Collect and record the COD payment first.</p>}</div></article>;
 }
 
 function Info({ title, text }) { return <div className="rounded-2xl bg-muted p-4"><strong className="text-sm">{title}</strong><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{text}</p></div>; }
