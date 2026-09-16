@@ -112,18 +112,24 @@ export default function Orders() {
     await run();
   }
 
+  const statusCounts = useMemo(() => STATUSES.reduce((counts, value) => ({ ...counts, [value]: (orders ?? []).filter(order => order.status === value).length }), {}), [orders]);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Local SQLite ledger</p>
-          <h1 className="font-heading text-5xl font-bold">Orders</h1>
-          <p className="mt-2 text-muted-foreground">Enter every delivery yourself. Nothing depends on a platform API.</p>
+          <p className="mb-1 text-xs font-bold uppercase tracking-[.16em] text-primary">Shipment operations</p>
+          <h1 className="font-heading text-4xl font-bold">Orders</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Create, monitor and update every delivery from one queue.</p>
         </div>
-        <button onClick={() => setOpen(value => !value)} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <button onClick={() => setOpen(value => !value)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <ApperIcon name="Plus" /> Add order
         </button>
       </header>
+
+      <div className="grid gap-2 overflow-x-auto pb-1 sm:grid-cols-4">
+        {['All', 'Accepted', 'Picked Up', 'Delivered'].map(value => <button key={value} onClick={() => setStatus(value)} className={`min-w-32 rounded-xl border px-3 py-2.5 text-left transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${status === value ? 'border-primary bg-primary/10' : 'border-border bg-card'}`}><span className="block text-xs font-semibold text-muted-foreground">{value}</span><strong className="text-xl tabular-nums">{value === 'All' ? (orders ?? []).length : statusCounts[value] || 0}</strong></button>)}
+      </div>
 
       {open && <form onSubmit={createOrder} className="grid gap-4 rounded-3xl border border-border bg-card p-5 md:grid-cols-2">
         <h2 className="md:col-span-2 font-heading text-2xl font-bold">Record an accepted delivery</h2>
@@ -138,21 +144,21 @@ export default function Orders() {
       </form>}
 
       {message && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{message}</div>}
-      <div className="flex flex-wrap gap-3 rounded-2xl border border-border bg-card p-3">
+      <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-card p-2">
         <label className="flex min-w-52 flex-1 items-center gap-2 rounded-xl bg-muted px-3"><ApperIcon name="Search" className="text-muted-foreground" /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search order, platform or address" className="w-full bg-transparent py-3 outline-none" /></label>
         <select value={status} onChange={event => setStatus(event.target.value)} className="rounded-xl border border-input bg-background px-3 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><option>All</option>{STATUSES.map(value => <option key={value}>{value}</option>)}</select>
         <select value={sort} onChange={event => setSort(event.target.value)} className="rounded-xl border border-input bg-background px-3 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><option value="new">Newest first</option><option value="old">Oldest first</option><option value="earning">Highest earning</option></select>
       </div>
 
-      {loading ? <LoadingRows /> : error ? <ErrorState message={error.message} retry={run} /> : rows.length === 0 ? <EmptyState onAdd={() => setOpen(true)} /> : <div className="overflow-hidden rounded-3xl border border-border bg-card">
-        <div className="hidden grid-cols-[1.2fr_.8fr_1fr_1fr_.7fr_auto] gap-3 bg-muted px-5 py-3 text-xs font-bold uppercase tracking-wider text-muted-foreground md:grid"><span>Order</span><span>Platform</span><span>Phase</span><span>Destination</span><span>Earning</span><span>Actions</span></div>
-        {rows.map(order => <div key={order.id} className="grid gap-3 border-t border-border px-5 py-4 first:border-0 md:grid-cols-[1.2fr_.8fr_1fr_1fr_.7fr_auto] md:items-center">
+      {loading ? <LoadingRows /> : error ? <ErrorState message={error.message} retry={run} /> : rows.length === 0 ? <EmptyState onAdd={() => setOpen(true)} /> : <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        <div className="hidden grid-cols-[1.2fr_.7fr_1fr_1fr_.65fr_auto] gap-3 bg-muted px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-foreground md:grid"><span>Order</span><span>Platform</span><span>Status</span><span>Destination</span><span>Earning</span><span>Actions</span></div>
+        {rows.map(order => <div key={order.id} className="grid gap-3 border-t border-border px-4 py-3.5 first:border-0 md:grid-cols-[1.2fr_.7fr_1fr_1fr_.65fr_auto] md:items-center">
           <div><strong className="block">{order.code}</strong><small className="text-xs text-muted-foreground">{formatLocalDate(order.created_at, DATE_FORMATS.SHORT)}</small></div>
           <span className="text-sm">{order.platform_name || '—'}</span>
           <select value={order.status} onChange={event => changeStatus(order, event.target.value)} className="w-full rounded-lg border border-input bg-background px-2 py-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{STATUSES.map(value => <option key={value}>{value}</option>)}</select>
           <span className="truncate text-sm" title={order.drop_address || ''}>{order.drop_address || 'No drop address'}</span>
           <strong className="tabular-nums">₹{Number(order.earning).toFixed(0)}</strong>
-          <button aria-label={`Delete ${order.code}`} onClick={() => deleteOrder(order)} className="rounded-lg p-2 text-destructive transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Trash2" /></button>
+          <button aria-label={`Delete ${order.code}`} onClick={() => deleteOrder(order)} className="rounded-lg p-2 text-destructive transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Trash2" className="h-4 w-4" /></button>
         </div>)}
       </div>}
     </div>
