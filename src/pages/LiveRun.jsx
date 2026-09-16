@@ -3,7 +3,7 @@ import { QRCodeCanvas } from 'qrcode.react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
 import { insert, query, update } from '@/services/localDb';
-import { rankOrders } from '@/services/allocation';
+
 
 const SLICE_KEY = 'rideros.slice.account';
 
@@ -33,8 +33,7 @@ export default function LiveRun() {
   const active = orders ?? [];
   const { data: goals } = useLocalQuery('SELECT * FROM goals WHERE active = 1 ORDER BY created_at DESC', [], []);
   const { data: deliveredOrders } = useLocalQuery("SELECT earning, delivered_at, created_at FROM orders WHERE status = 'Delivered'", [], []);
-  const rankedOrders = useMemo(() => rankOrders(active, goals ?? [], deliveredOrders ?? []), [active, goals, deliveredOrders]);
-  const current = useMemo(() => rankedOrders.find(order => order.status !== 'Issue') ?? rankedOrders[0], [rankedOrders]);
+  const current = useMemo(() => active[0], [active]);
   const { data: paymentRows, run: runPayments } = useLocalQuery('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [current?.id ?? ''], [current?.id]);
   const currentPayment = paymentRows?.[0];
 
@@ -206,7 +205,7 @@ export default function LiveRun() {
     </section>
     {notice && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{notice}</div>}
     {paymentNotice && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{paymentNotice}</div>}
-    {loading ? <div className="grid gap-5 xl:grid-cols-2">{[1, 2].map(item => <div key={item} className="h-80 animate-pulse rounded-3xl bg-muted" />)}</div> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-destructive">{error.message}<button onClick={run} className="ml-3 underline">Retry</button></div> : active.length === 0 ? <div className="grid justify-items-center rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="Route" className="mb-3 text-muted-foreground" /><h2 className="font-heading text-3xl font-bold">Run is clear</h2><p className="mt-2 max-w-md text-sm text-muted-foreground">There are no open deliveries. Add an order, then return here to capture its journey.</p></div> : <div className="grid gap-5 xl:grid-cols-2">{rankedOrders.map(order => <RunCard key={order.id} order={order} busy={busy === order.id} onAdvance={advance} />)}</div>}
+    {loading ? <div className="grid gap-5 xl:grid-cols-2">{[1, 2].map(item => <div key={item} className="h-80 animate-pulse rounded-3xl bg-muted" />)}</div> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-destructive">{error.message}<button onClick={run} className="ml-3 underline">Retry</button></div> : active.length === 0 ? <div className="grid justify-items-center rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="Route" className="mb-3 text-muted-foreground" /><h2 className="font-heading text-3xl font-bold">Run is clear</h2><p className="mt-2 max-w-md text-sm text-muted-foreground">There are no open deliveries. Add an order, then return here to capture its journey.</p></div> : <div className="grid gap-5 xl:grid-cols-2">{active.map(order => <RunCard key={order.id} order={order} busy={busy === order.id} onAdvance={advance} />)}</div>}
   </div>;
 }
 
