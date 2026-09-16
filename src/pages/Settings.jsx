@@ -1,40 +1,35 @@
 import { useEffect, useState } from 'react';
-import { QRCodeCanvas } from 'qrcode.react';
 import ApperIcon from '@/components/ApperIcon';
 import { downloadDatabase, exportDatabase, importDatabase } from '@/services/localDb';
 
 export const route = { path: '/settings', layout: 'owner', access: 'public' };
 export const nav = { icon: 'Settings2', label: 'Settings & backup', section: 'System', order: 7 };
 
-const UPI_KEY = 'rideros.upi.settings';
+const SLICE_KEY = 'rideros.slice.account';
 const DRIVE_KEY = 'rideros.drive.client';
 
 export default function Settings() {
-  const [upi, setUpi] = useState({ vpa: '', payee: '', amount: '' });
+  const [sliceAccount, setSliceAccount] = useState({ vpa: '', payee: '' });
   const [driveClientId, setDriveClientId] = useState('');
   const [driveToken, setDriveToken] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const storedUpi = localStorage.getItem(UPI_KEY);
+    const storedSlice = localStorage.getItem(SLICE_KEY);
     const storedDrive = localStorage.getItem(DRIVE_KEY);
-    if (storedUpi) setUpi(JSON.parse(storedUpi));
+    if (storedSlice) setSliceAccount(JSON.parse(storedSlice));
     if (storedDrive) setDriveClientId(storedDrive);
   }, []);
 
-  const paymentUri = upi.vpa
-    ? `upi://pay?${new URLSearchParams({ pa: upi.vpa, pn: upi.payee || 'Delivery', cu: 'INR', ...(upi.amount ? { am: Number(upi.amount).toFixed(2) } : {}) }).toString()}`
-    : '';
-
-  function saveUpi(event) {
+  function saveSliceAccount(event) {
     event.preventDefault();
-    if (!/^[-\w.@]{2,256}$/.test(upi.vpa)) {
-      setMessage('Enter a valid UPI ID such as name@indus.');
+    if (!/^[^\s@]+@[^\s@]+$/.test(sliceAccount.vpa.trim())) {
+      setMessage('Enter the Slice-linked UPI ID used to receive COD payments.');
       return;
     }
-    localStorage.setItem(UPI_KEY, JSON.stringify(upi));
-    setMessage('UPI receive details saved on this device.');
+    localStorage.setItem(SLICE_KEY, JSON.stringify({ vpa: sliceAccount.vpa.trim(), payee: sliceAccount.payee.trim() }));
+    setMessage('Slice receive details saved on this device. COD QR codes will use these details.');
   }
 
   async function backup() {
