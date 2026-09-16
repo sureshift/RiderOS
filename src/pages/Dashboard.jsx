@@ -101,7 +101,11 @@ function HeatmapViewport({ points }) {
   return null;
 }
 
-function isValidCoordinate(lat, lng) {\n  return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);\n}\n\nfunction buildHeatClusters(points) {
+function isValidCoordinate(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
+}
+
+function buildHeatClusters(points) {
   if (!points.length) return [];
   const minLat = Math.min(...points.map(point => point.lat));
   const maxLat = Math.max(...points.map(point => point.lat));
