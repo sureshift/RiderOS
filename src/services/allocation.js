@@ -5,23 +5,15 @@ export function getOrderIntensity(openOrderCount) {
   return { label: 'Low', level: 1 };
 }
 
-export function getGoalMetrics(goal, deliveredOrders, now = new Date()) {
+export function getGoalMetrics(goal, deliveredOrders, now = new Date(), allGoals = [goal]) {
   const target = Number(goal.target || 0);
   const saved = Number(goal.saved || 0);
-  const start = new Date(goal.created_at || now.toISOString());
   const deadline = goal.deadline ? new Date(`${goal.deadline}T23:59:59`) : null;
-  const goalOrders = (deliveredOrders ?? []).filter(order => {
-    const deliveredAt = new Date(order.delivered_at || order.created_at);
-    return deliveredAt >= start && (!deadline || deliveredAt <= deadline);
-  });
-  const goalEarnings = goalOrders.reduce((sum, order) => sum + Number(order.earning || 0), 0);
-  const progress = Math.min(target, saved + goalEarnings);
+  const allocations = calculateGoalAllocations(allGoals, deliveredOrders, now);
+  const goalAllocation = allocations.get(goal.id) || { total: 0, today: 0 };
+  const progress = Math.min(target, saved + goalAllocation.total);
   const remaining = Math.max(0, target - progress);
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayEarnings = goalOrders.reduce((sum, order) => {
-    const deliveredAt = new Date(order.delivered_at || order.created_at);
-    return deliveredAt >= todayStart && deliveredAt <= now ? sum + Number(order.earning || 0) : sum;
-  }, 0);
+  const todayEarnings = Math.min(goalAllocation.today, remaining + goalAllocation.today);
   const daysRemaining = deadline
     ? Math.max(1, Math.ceil((deadline.getTime() - now.getTime()) / 86400000))
     : 1;
@@ -40,6 +32,66 @@ export function getGoalMetrics(goal, deliveredOrders, now = new Date()) {
     daysRemaining,
     behind: todayRemaining > 0
   };
+}
+
+function calculateGoalAllocations(goals, deliveredOrders, now) {
+  const balances = new Map((goals ?? []).map(goal => [goal.id, Number(goal.saved || 0)]));
+  const totals = new Map((goals ?? []).map(goal => [goal.id, { total: 0, today: 0 }]));
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const orders = [...(deliveredOrders ?? [])].sort((a, b) => {
+    return new Date(a.delivered_at || a.created_at) - new Date(b.delivered_at || b.created_at);
+  });
+
+  for (const order of orders) {
+    const amount = Math.max(0, Number(order.earning || 0));
+    if (!amount) continue;
+    const deliveredAt = new Date(order.delivered_at || order.created_at);
+    const candidates = (goals ?? [])
+      .filter(goal => {
+        const goalStart = new Date(goal.created_at || deliveredAt.toISOString());
+        const goalDeadline = goal.deadline ? new Date(`${goal.deadline}T23:59:59`) : null;
+        const remaining = Number(goal.target || 0) - (balances.get(goal.id) || 0);
+        return deliveredAt >= goalStart && (!goalDeadline || deliveredAt <= goalDeadline) && remaining > 0;
+      })
+      .map(goal => {
+        const goalDeadline = goal.deadline ? new Date(`${goal.deadline}T23:59:59`) : null;
+        const daysLeft = goalDeadline
+          ? Math.max(1, Math.ceil((goalDeadline.getTime() - deliveredAt.getTime()) / 86400000))
+          : 3650;
+        const remaining = Math.max(0, Number(goal.target || 0) - (balances.get(goal.id) || 0));
+        const fundingPressure = remaining / Math.max(1, Number(goal.target || 0));
+        const deadlineUrgency = 1 / daysLeft;
+        return { goal, remaining, score: deadlineUrgency * (0.7 + fundingPressure * 0.3) };
+      });
+
+    let unallocated = amount;
+    let remainingCandidates = candidates;
+    while (unallocated > 0.000001 && remainingCandidates.length) {
+      const totalScore = remainingCandidates.reduce((sum, item) => sum + item.score, 0);
+      if (!totalScore) break;
+      let distributed = 0;
+      const nextCandidates = [];
+      for (const item of remainingCandidates) {
+        const share = unallocated * (item.score / totalScore);
+        const allocation = Math.min(item.remaining, share);
+        if (allocation > 0) {
+          balances.set(item.goal.id, (balances.get(item.goal.id) || 0) + allocation);
+          const entry = totals.get(item.goal.id) || { total: 0, today: 0 };
+          entry.total += allocation;
+          if (deliveredAt >= todayStart && deliveredAt <= now) entry.today += allocation;
+          totals.set(item.goal.id, entry);
+          distributed += allocation;
+        }
+        if (allocation + 0.000001 < share) continue;
+        nextCandidates.push({ ...item, remaining: item.remaining - allocation });
+      }
+      if (!distributed) break;
+      unallocated -= distributed;
+      remainingCandidates = nextCandidates.filter(item => item.remaining > 0.000001);
+    }
+  }
+
+  return totals;
 }
 
 // Orders are manually entered only after the rider has accepted them.

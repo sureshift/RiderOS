@@ -15,15 +15,15 @@ export default function Goals() {
   const [message, setMessage] = useState('');
   const [form, setForm] = useState(emptyForm());
   const { data: goals, loading, error, run } = useLocalQuery('SELECT * FROM goals ORDER BY created_at DESC', [], []);
-  const { data: deliveredOrders } = useLocalQuery("SELECT earning, delivered_at, created_at FROM orders WHERE status = 'Delivered'", [], []);
+  const { data: deliveredOrders } = useLocalQuery("SELECT id, earning, delivered_at, created_at FROM orders WHERE status = 'Delivered'", [], []);
   const { data: activeOrders } = useLocalQuery("SELECT id FROM orders WHERE status NOT IN ('Delivered','Cancelled')", [], []);
   const rows = goals ?? [];
   const delivered = deliveredOrders ?? [];
   const openOrders = activeOrders ?? [];
-  const saved = rows.reduce((sum, goal) => sum + Number(goal.saved || 0), 0);
   const target = rows.reduce((sum, goal) => sum + Number(goal.target || 0), 0);
   const orderIntensity = getOrderIntensity(openOrders.length);
-  const goalMetrics = useMemo(() => rows.map(goal => getGoalMetrics(goal, delivered)), [rows, delivered]);
+  const goalMetrics = useMemo(() => rows.map(goal => getGoalMetrics(goal, delivered, new Date(), rows)), [rows, delivered]);
+  const saved = goalMetrics.reduce((sum, metric) => sum + metric.progress, 0);
 
   function create() { setEditing(null); setForm(emptyForm()); setOpen(true); }
   function edit(goal) { setEditing(goal); setForm({ name: goal.name, target: goal.target, saved: goal.saved, deadline: goal.deadline ?? '', rule: goal.rule, rule_value: goal.rule_value, active: Boolean(goal.active) }); setOpen(true); }
