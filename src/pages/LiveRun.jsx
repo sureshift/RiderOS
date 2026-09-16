@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { QRCodeCanvas } from 'qrcode.react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
 import { useFunction } from '@/hooks/useFunction';
 import { insert, query, update } from '@/services/localDb';
+
+const SLICE_KEY = 'rideros.slice.account';
 
 export const route = { path: '/live-run', layout: 'owner', access: 'public' };
 export const nav = { icon: 'Route', label: 'Live run', section: 'Operations', order: 2 };
@@ -17,7 +20,6 @@ export default function LiveRun() {
   const [paymentNotice, setPaymentNotice] = useState('');
   const [upiPayload, setUpiPayload] = useState(null);
   const trackingOrderRef = useRef(null);
-  const sliceQr = useFunction(import.meta.env.VITE_SLICE_COD_QR, { showError: false });
   const { data: orders, loading, error, run } = useLocalQuery(
     `SELECT o.*, p.name AS platform_name, pl.name AS pickup_name
      FROM orders o
@@ -153,27 +155,27 @@ export default function LiveRun() {
     await runPayments();
   }
 
-  async function createUpiQr(order) {
+  function createUpiQr(order) {
     if (order.payment_type !== 'COD') return;
     const amount = Number(order.cod_amount || 0);
     if (!amount) return setPaymentNotice('COD amount is missing on this order.');
-    setPaymentNotice('Creating Slice UPI payment request…');
-    const result = await sliceQr.invoke({ amount, clientReferenceId: `COD-${order.code}-${Date.now()}` });
-    if (!result) {
-      setPaymentNotice('Slice QR could not be created. Configure SLICE_API_KEY on the server function.');
+    const stored = localStorage.getItem(SLICE_KEY);
+    const account = stored ? JSON.parse(stored) : null;
+    if (!account?.vpa) {
+      setPaymentNotice('Add your Slice UPI ID in Settings before collecting COD by UPI.');
       return;
     }
-    setUpiPayload(result);
-    setPaymentNotice('Ask the customer to complete the UPI payment, then confirm the successful payment below.');
+    const paymentUri = `upi://pay?${new URLSearchParams({ pa: account.vpa, pn: account.payee || 'Delivery', am: amount.toFixed(2), cu: 'INR', tn: `COD ${order.code}` }).toString()}`;
+    setUpiPayload({ paymentUri, amount, vpa: account.vpa, payee: account.payee || 'Delivery' });
+    setPaymentNotice(`QR ready for ₹${amount.toFixed(2)}. Confirm the payment in Slice before marking the amount received.`);
   }
 
   async function confirmUpiPaid(order) {
     const amount = Number(order.cod_amount || 0);
-    const reference = window.prompt('Enter the UPI transaction / UTR reference after confirming the payment:');
-    if (!reference?.trim()) return;
-    await insert('payments', { order_id: order.id, amount, method: 'upi', status: 'PAID', upi_reference: reference.trim(), paid_at: new Date().toISOString(), notes: 'UPI payment confirmed by rider' }, 'pay');
+    const reference = window.prompt('Enter the UPI transaction / UTR reference (optional). Leave blank if you only want to mark the amount received.');
+    await insert('payments', { order_id: order.id, amount, method: 'upi', status: 'PAID', upi_reference: reference?.trim() || null, paid_at: new Date().toISOString(), notes: 'UPI payment received and confirmed by rider' }, 'pay');
     setUpiPayload(null);
-    setPaymentNotice(`UPI ₹${amount.toFixed(2)} recorded. Reference: ${reference.trim()}`);
+    setPaymentNotice(`UPI ₹${amount.toFixed(2)} marked as received.`);
     await runPayments();
   }
 
@@ -184,7 +186,7 @@ export default function LiveRun() {
       <div className="rounded-3xl border border-border bg-muted p-5"><p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Current focus</p><h2 className="mt-2 font-heading text-3xl font-bold">{current?.code ?? 'No active order'}</h2><p className="mt-1 text-sm text-muted-foreground">{current ? `${current.platform_name || 'Platform'} · ${current.status}` : 'Add an order to begin a run.'}</p></div>
     </section>
     {notice && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{notice}</div>}
-    {current?.payment_type === 'COD' && <section className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wide text-primary">COD collection</p><h2 className="mt-1 font-heading text-3xl font-bold">Collect ₹{Number(current.cod_amount || 0).toFixed(2)}</h2><p className="mt-1 text-sm text-muted-foreground">Record the payment before completing delivery.</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${currentPayment?.status === 'PAID' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{currentPayment?.status === 'PAID' ? 'PAID' : 'PAYMENT DUE'}</span></div><div className="mt-4 grid gap-2 sm:grid-cols-3"><button onClick={() => collectCash(current)} disabled={currentPayment?.status === 'PAID'} className="rounded-xl bg-foreground px-4 py-3 font-bold text-background disabled:opacity-50"><ApperIcon name="Banknote" className="mr-2 inline h-4 w-4" />Collect cash</button><button onClick={() => createUpiQr(current)} disabled={currentPayment?.status === 'PAID' || sliceQr.loading} className="rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50"><ApperIcon name="QrCode" className="mr-2 inline h-4 w-4" />{sliceQr.loading ? 'Creating QR…' : 'Collect by UPI'}</button><button onClick={() => confirmUpiPaid(current)} disabled={currentPayment?.status === 'PAID'} className="rounded-xl border border-border px-4 py-3 font-bold disabled:opacity-50">Confirm UPI paid</button></div>{upiPayload && <div className="mt-4 rounded-2xl bg-muted p-4"><p className="text-sm font-bold">Slice payment request created</p><pre className="mt-3 max-h-48 overflow-auto rounded-xl bg-background p-3 text-[10px]">{JSON.stringify(upiPayload, null, 2)}</pre></div>}{paymentNotice && <p className="mt-3 text-sm font-semibold text-muted-foreground">{paymentNotice}</p>}</section>}
+    {current?.payment_type === 'COD' && <section className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wide text-primary">COD collection</p><h2 className="mt-1 font-heading text-3xl font-bold">Collect ₹{Number(current.cod_amount || 0).toFixed(2)}</h2><p className="mt-1 text-sm text-muted-foreground">Record the payment before completing delivery.</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${currentPayment?.status === 'PAID' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{currentPayment?.status === 'PAID' ? 'PAID' : 'PAYMENT DUE'}</span></div><div className="mt-4 grid gap-2 sm:grid-cols-3"><button onClick={() => collectCash(current)} disabled={currentPayment?.status === 'PAID'} className="rounded-xl bg-foreground px-4 py-3 font-bold text-background disabled:opacity-50"><ApperIcon name="Banknote" className="mr-2 inline h-4 w-4" />Collect cash</button><button onClick={() => createUpiQr(current)} disabled={currentPayment?.status === 'PAID'} className="rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50"><ApperIcon name="QrCode" className="mr-2 inline h-4 w-4" />Show Slice QR</button><button onClick={() => confirmUpiPaid(current)} disabled={currentPayment?.status === 'PAID'} className="rounded-xl border border-border px-4 py-3 font-bold disabled:opacity-50">Mark amount received</button></div>{upiPayload && <div className="mt-4 grid gap-4 rounded-2xl bg-muted p-4 sm:grid-cols-[auto_1fr] sm:items-center"><div className="rounded-2xl bg-background p-4"><QRCodeCanvas value={upiPayload.paymentUri} size={220} includeMargin /></div><div><p className="text-sm font-bold">Scan to pay ₹{Number(upiPayload.amount).toFixed(2)}</p><p className="mt-1 text-xs text-muted-foreground">{upiPayload.payee} · {upiPayload.vpa}</p><p className="mt-3 text-xs leading-relaxed text-muted-foreground">After the customer pays, verify the successful credit in the Slice app. Then tap “Mark amount received”. Delivery remains blocked until a PAID payment record exists.</p><button onClick={() => navigator.clipboard?.writeText(upiPayload.paymentUri)} className="mt-3 rounded-xl bg-background px-3 py-2 text-xs font-bold">Copy UPI payment link</button></div></div>}{paymentNotice && <p className="mt-3 text-sm font-semibold text-muted-foreground">{paymentNotice}</p>}</section>}
     {loading ? <div className="grid gap-5 xl:grid-cols-2">{[1, 2].map(item => <div key={item} className="h-80 animate-pulse rounded-3xl bg-muted" />)}</div> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-destructive">{error.message}<button onClick={run} className="ml-3 underline">Retry</button></div> : active.length === 0 ? <div className="grid justify-items-center rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="Route" className="mb-3 text-muted-foreground" /><h2 className="font-heading text-3xl font-bold">Run is clear</h2><p className="mt-2 max-w-md text-sm text-muted-foreground">There are no open deliveries. Add an order, then return here to capture its journey.</p></div> : <div className="grid gap-5 xl:grid-cols-2">{active.map(order => <RunCard key={order.id} order={order} busy={busy === order.id} onAdvance={advance} />)}</div>}
   </div>;
 }
