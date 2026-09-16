@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
 import { insert, remove, update } from '@/services/localDb';
-import { formatLocalDate } from '@/utils/date';
+import { DATE_FORMATS, formatLocalDate } from '@/utils/date';
 
 export const route = { path: '/orders', layout: 'owner', access: 'public' };
 export const nav = { icon: 'PackageCheck', label: 'Orders', section: 'Operations', order: 3 };
@@ -118,7 +118,7 @@ export default function Orders() {
       {loading ? <LoadingRows /> : error ? <ErrorState message={error.message} retry={run} /> : rows.length === 0 ? <EmptyState onAdd={() => setOpen(true)} /> : <div className="overflow-hidden rounded-3xl border border-border bg-card">
         <div className="hidden grid-cols-[1.2fr_.8fr_1fr_1fr_.7fr_auto] gap-3 bg-muted px-5 py-3 text-xs font-bold uppercase tracking-wider text-muted-foreground md:grid"><span>Order</span><span>Platform</span><span>Phase</span><span>Destination</span><span>Earning</span><span>Actions</span></div>
         {rows.map(order => <div key={order.id} className="grid gap-3 border-t border-border px-5 py-4 first:border-0 md:grid-cols-[1.2fr_.8fr_1fr_1fr_.7fr_auto] md:items-center">
-          <div><strong className="block">{order.code}</strong><small className="text-xs text-muted-foreground">{formatLocalDate(order.created_at, { dateStyle: 'medium' })}</small></div>
+          <div><strong className="block">{order.code}</strong><small className="text-xs text-muted-foreground">{formatLocalDate(order.created_at, DATE_FORMATS.SHORT)}</small></div>
           <span className="text-sm">{order.platform_name || '—'}</span>
           <select value={order.status} onChange={event => changeStatus(order, event.target.value)} className="w-full rounded-lg border border-input bg-background px-2 py-2 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{STATUSES.map(value => <option key={value}>{value}</option>)}</select>
           <span className="truncate text-sm" title={order.drop_address || ''}>{order.drop_address || 'No drop address'}</span>
