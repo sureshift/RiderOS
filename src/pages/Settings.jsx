@@ -69,9 +69,15 @@ export default function Settings() {
         const client = window.google.accounts.oauth2.initTokenClient({
           client_id: driveClientId.trim(),
           scope: 'https://www.googleapis.com/auth/drive.appdata',
-          callback: response => response.error ? reject(new Error(response.error_description || 'Google authorization failed.')) : resolve(response.access_token)
+          callback: response => {
+            if (response.error) {
+              reject(new Error(response.error_description || 'Google authorization failed.'));
+              return;
+            }
+            setDriveToken(response.access_token);
+            resolve();
+          }
         });
-        client.callback = response => response.error ? reject(new Error(response.error_description || 'Google authorization failed.')) : (setDriveToken(response.access_token), resolve());
         client.requestAccessToken();
       });
       setMessage('Google Drive connected for this browser session.');
@@ -123,3 +129,23 @@ export default function Settings() {
 }
 
 function Setting({ icon, title, text }) { return <div className="rounded-2xl bg-muted/60 p-4"><span className="mb-3 grid h-10 w-10 place-items-center rounded-xl bg-secondary text-secondary-foreground"><ApperIcon name={icon} /></span><strong>{title}</strong><p className="mt-1 text-sm leading-relaxed text-muted-foreground">{text}</p></div>; }
+
+function loadGoogleIdentityServices() {
+  if (window.google?.accounts?.oauth2) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-google-identity-services]');
+    if (existing) {
+      existing.addEventListener('load', resolve, { once: true });
+      existing.addEventListener('error', () => reject(new Error('Google Identity Services could not be loaded.')), { once: true });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.dataset.googleIdentityServices = 'true';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Google Identity Services could not be loaded.'));
+    document.head.appendChild(script);
+  });
+}
