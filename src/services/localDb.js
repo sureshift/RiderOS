@@ -4,6 +4,7 @@ import wasmUrl from 'sql.js/dist/sql-wasm.wasm?url';
 const STORAGE_KEY = 'rideros.sqlite.v1';
 const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS platforms (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT, active INTEGER NOT NULL DEFAULT 1, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS places (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, address TEXT, latitude REAL, longitude REAL, platform_id TEXT, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
   'CREATE TABLE IF NOT EXISTS riders (id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT, active INTEGER NOT NULL DEFAULT 1, notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)',
@@ -17,6 +18,19 @@ const SCHEMA = [
 
 let databasePromise;
 let database;
+
+async function hashPassword(password) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function verifyPassword(password, hash) {
+  const newHash = await hashPassword(password);
+  return newHash === hash;
+}
 
 function timestamp() {
   return new Date().toISOString();
@@ -129,6 +143,26 @@ export async function update(table, recordId, values) {
 export async function remove(table, recordId) {
   await getDatabase();
   write(`DELETE FROM ${table} WHERE id = ?`, [recordId]);
+}
+
+export async function findUserByEmail(email) {
+  await getDatabase();
+  return select('SELECT * FROM users WHERE email = ?', [email.toLowerCase()])[0] ?? null;
+}
+
+export async function createUser(email, password, name) {
+  await getDatabase();
+  const hash = await hashPassword(password);
+  const user = await insert('users', { email: email.toLowerCase(), password_hash: hash, name }, 'user');
+  return { ...user, password_hash: undefined };
+}
+
+export async function loginUser(email, password) {
+  const user = await findUserByEmail(email);
+  if (!user) return null;
+  const valid = await verifyPassword(password, user.password_hash);
+  if (!valid) return null;
+  return { ...user, password_hash: undefined };
 }
 
 export async function exportDatabase() {

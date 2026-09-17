@@ -1,9 +1,10 @@
-// -- Apper adapter --
-const adapter = window.ApperSDK.ApperAdapter({
-  getClient: () => new window.ApperSDK.ApperClient({
-    apperProjectId: import.meta.env.VITE_APPER_PROJECT_ID,
-    apperPublicKey: import.meta.env.VITE_APPER_PUBLIC_KEY,
-  }),
-  ui: window.ApperSDK.ApperUI
-});
-export const sdk = await window.ApperSDK.CoreSDK.createClient(adapter);
+// -- Local database adapter --
+import { localAdapter } from './localAdapter.js';
+
+const dummyCoreSDK = {
+  CoreSDK: {
+    createClient: async (adapter) => adapter,
+  }
+};
+
+export const sdk = await dummyCoreSDK.CoreSDK.createClient(localAdapter);

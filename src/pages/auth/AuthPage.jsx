@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useDispatch } from 'react-redux';
-import { sdk } from '@/services/sdk';
+import { loginUser, registerUser } from '@/services/auth';
 import { setUser } from '@/store/userSlice';
 import { AUTH_PROFILES, GENERIC_AUTH } from '@/config/app.config';
 import ApperIcon from '@/components/ApperIcon';
@@ -40,38 +40,23 @@ export default function AuthPage({ mode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const hasUI = Boolean(sdk.session.ui);
-  const connectionFailed = sdk.session.initFailed;
-
-  useEffect(() => {
-    if (!hasUI) return;
-    const selector = `#${AUTH_TARGET_ID}`;
-    const profileSlug = matchedProfile?.profileSlug;
-    if (mode === 'login') sdk.session.ui?.showLogin?.(selector, { ...(profileSlug && { profileSlug }) });
-    else sdk.session.ui?.showSignup?.(selector, { ...(profileSlug && { profileSlug }) });
-    return () => { if (document.querySelector(selector)) sdk.session.ui?.showBlank?.(selector); };
-  }, [mode, hasUI, matchedProfile]);
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      // profileSlug binds the credentials to the profile whose login page this is. The connect step
-      // rewrites it to the platform's own slug; the memory adapter ignores it.
-      const profileSlug = matchedProfile?.profileSlug;
       let result;
       if (mode === 'login') {
-        result = await sdk.session.login({ email, password, ...(profileSlug && { profileSlug }) });
+        result = await loginUser(email, password);
       } else {
         if (password !== confirmPassword) { setError('Passwords do not match'); setLoading(false); return; }
-        result = await sdk.session.register({ email, password, ...(profileSlug && { profileSlug }) });
+        result = await registerUser(email, password, email);
       }
-      if (result.ok) {
-        dispatch(setUser(result.value));
+      if (result) {
+        dispatch(setUser(result));
         navigate(redirectAfterAuth);
       } else {
-        setError(result.error?.message || 'Authentication failed');
+        setError('Authentication failed');
       }
     } catch (err) {
       setError(err?.message || 'Unexpected error');
@@ -79,43 +64,6 @@ export default function AuthPage({ mode }) {
       setLoading(false);
     }
   };
-
-  if (connectionFailed) {
-    const handleRetry = async () => {
-      setError(null);
-      setLoading(true);
-      await sdk.session.retry();
-      setLoading(false);
-      if (!sdk.session.initFailed) {
-        window.location.reload();
-      } else {
-        setError('Still unable to connect. Check your network and try again.');
-      }
-    };
-
-    return (
-      <AuthLayout title="Unable to connect" icon="WifiOff">
-        <div className="text-center space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Authentication service is unreachable. This may be due to a network issue or CORS configuration.
-          </p>
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button variant="outline" onClick={handleRetry} disabled={loading} className="w-full">
-            {loading ? 'Retrying…' : 'Retry'}
-          </Button>
-        </div>
-      </AuthLayout>
-    );
-  }
-
-  if (hasUI) {
-    return (
-      <AuthLayout title={title} description={description}>
-        <div id={AUTH_TARGET_ID} className="flex flex-col" />
-        <AuthFooter mode={mode} profilePrefix={profileParam} altLinksLeadIn={matchedProfile?.altLinksLeadIn} altLinks={matchedProfile?.altLinks} />
-      </AuthLayout>
-    );
-  }
 
   return (
     <AuthLayout title={title} description={description}>

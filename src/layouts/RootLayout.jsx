@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useCallback } from 'react';
 import { Outlet, useLocation, useMatches, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { sdk } from '@/services/sdk';
+import { logoutUser } from '@/services/auth';
 import { setUser, clearUser, setInitialized } from '@/store/userSlice';
 import { verifyRouteAccess } from '@/router/route.utils';
 import { APP_CONFIG, AUTH_PROFILES, GENERIC_AUTH } from '@/config/app.config';
@@ -36,7 +36,8 @@ export default function RootLayout() {
     let isMounted = true;
     const init = async () => {
       try {
-        const currentUser = sdk.session.user();
+        const storedUser = localStorage.getItem('auth_user');
+        const currentUser = storedUser ? JSON.parse(storedUser) : null;
         if (!isMounted) return;
         if (currentUser) {
           dispatch(setUser(currentUser));
@@ -49,17 +50,7 @@ export default function RootLayout() {
       }
     };
     init();
-
-    const unsub = sdk.session.subscribe((state) => {
-      if (state.status === 'authenticated' && state.user) {
-        dispatch(setUser(state.user));
-        handlePostAuthNavigation();
-      } else if (state.status === 'anonymous') {
-        dispatch(clearUser());
-      }
-    });
-
-    return () => { isMounted = false; unsub(); };
+    return () => { isMounted = false; };
   }, [dispatch]);
 
   function handlePostAuthNavigation() {
@@ -96,7 +87,7 @@ export default function RootLayout() {
   }, [location.pathname, isInitialized, user, accessRule]);
 
   const handleLogout = useCallback(async () => {
-    await sdk.session.logout();
+    await logoutUser();
     dispatch(clearUser());
     navigateRef.current(APP_CONFIG.defaultLoginRoute ?? '/login', { replace: true });
   }, [dispatch]);
