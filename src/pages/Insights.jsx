@@ -34,7 +34,7 @@ export default function Insights() {
       counts.set(order.pickup_place_id, (counts.get(order.pickup_place_id) || 0) + 1);
     });
     return (places ?? [])
-      .filter(place => Number.isFinite(Number(place.latitude)) && Number.isFinite(Number(place.longitude)))
+      .filter(place => place.latitude != null && place.longitude != null && Number.isFinite(Number(place.latitude)) && Number.isFinite(Number(place.longitude)))
       .map(place => ({ ...place, allocationCount: counts.get(place.id) || 0 }))
       .filter(place => place.allocationCount > 0)
       .sort((a, b) => b.allocationCount - a.allocationCount);
