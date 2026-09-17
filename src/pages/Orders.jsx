@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
 import { useLocalQuery } from '@/hooks/useLocalTable';
-import { insert, query, remove } from '@/services/localDb';
+import { insert, query, remove, update } from '@/services/localDb';
 import { DATE_FORMATS, formatLocalDate } from '@/utils/date';
 
 export const route = { path: '/orders', layout: 'owner', access: 'public' };
@@ -40,6 +40,7 @@ export default function Orders() {
   const [status, setStatus] = useState('All');
   const [sort, setSort] = useState('new');
   const [open, setOpen] = useState(false);
+  const [editingOrder, setEditingOrder] = useState(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [form, setForm] = useState({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', payment_type: 'PREPAID', cod_amount: '', notes: '' });
@@ -68,7 +69,27 @@ export default function Orders() {
           : b.created_at.localeCompare(a.created_at));
   }, [orders, search, status, sort]);
 
-  async function createOrder(event) {
+  function startCreate() {
+    setEditingOrder(null);
+    setForm({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', payment_type: 'PREPAID', cod_amount: '', notes: '' });
+    setOpen(true);
+  }
+
+  function startEdit(order) {
+    setEditingOrder(order);
+    setForm({
+      platform_id: order.platform_id || 'platform_swiggy',
+      pickup_place_id: order.pickup_place_id || '',
+      drop_address: order.drop_address || '',
+      earning: String(order.earning ?? ''),
+      payment_type: order.payment_type || 'PREPAID',
+      cod_amount: String(order.cod_amount ?? ''),
+      notes: order.notes || ''
+    });
+    setOpen(true);
+  }
+
+  async function saveOrder(event) {
     event.preventDefault();
     setSaving(true);
     setMessage('');
@@ -77,27 +98,35 @@ export default function Orders() {
       if (!platform) throw new Error('Select a valid platform before saving the order.');
       const pickup = availablePlaces.find(item => item.id === form.pickup_place_id);
       if (!pickup) throw new Error('Select the restaurant, hub or dark store where this order will be collected.');
-      const code = await nextOrderCode(platform.id, platform.name);
-      await insert('orders', {
-        code,
+      const values = {
         platform_id: platform.id,
-        status: 'Allocated',
         pickup_place_id: pickup.id,
         pickup_address: pickup.address || pickup.name,
         pickup_latitude: Number.isFinite(Number(pickup.latitude)) ? Number(pickup.latitude) : null,
         pickup_longitude: Number.isFinite(Number(pickup.longitude)) ? Number(pickup.longitude) : null,
         drop_address: form.drop_address.trim(),
         earning: Number(form.earning || 0),
-        distance_km: 0,
-        duration_min: 0,
         payment_type: form.payment_type,
         cod_amount: form.payment_type === 'COD' ? Number(form.cod_amount || 0) : 0,
-        notes: form.notes.trim(),
-        accepted_at: new Date().toISOString()
-      }, 'ord');
+        notes: form.notes.trim()
+      };
+      if (editingOrder) {
+        await update('orders', editingOrder.id, values);
+      } else {
+        const code = await nextOrderCode(platform.id, platform.name);
+        await insert('orders', {
+          ...values,
+          code,
+          status: 'Allocated',
+          distance_km: 0,
+          duration_min: 0,
+          accepted_at: new Date().toISOString()
+        }, 'ord');
+      }
       setForm({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', payment_type: 'PREPAID', cod_amount: '', notes: '' });
+      setEditingOrder(null);
       setOpen(false);
-      setMessage('Order saved locally in SQLite.');
+      setMessage(editingOrder ? `Order ${editingOrder.code} updated.` : 'Order saved locally in SQLite.');
       await run();
     } catch (err) {
       setMessage(err.message || 'Could not save the order.');
@@ -123,7 +152,7 @@ export default function Orders() {
           <h1 className="font-heading text-4xl font-bold">Orders</h1>
           <p className="mt-1 text-sm text-muted-foreground">Create, monitor and update every delivery from one queue.</p>
         </div>
-        <button onClick={() => setOpen(value => !value)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <button onClick={startCreate} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <ApperIcon name="Plus" /> Add order
         </button>
       </header>
@@ -132,8 +161,8 @@ export default function Orders() {
         {['All', 'Allocated', 'Picked Up', 'Delivered'].map(value => <button key={value} onClick={() => setStatus(value)} className={`min-w-32 rounded-xl border px-3 py-2.5 text-left transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${status === value ? 'border-primary bg-primary/10' : 'border-border bg-card'}`}><span className="block text-xs font-semibold text-muted-foreground">{value}</span><strong className="text-xl tabular-nums">{value === 'All' ? (orders ?? []).length : statusCounts[value] || 0}</strong></button>)}
       </div>
 
-      {open && <form onSubmit={createOrder} className="grid gap-4 rounded-3xl border border-border bg-card p-5 md:grid-cols-2">
-        <h2 className="md:col-span-2 font-heading text-2xl font-bold">Record an accepted delivery</h2>
+      {open && <form onSubmit={saveOrder} className="grid gap-4 rounded-3xl border border-border bg-card p-5 md:grid-cols-2">
+        <h2 className="md:col-span-2 font-heading text-2xl font-bold">{editingOrder ? `Edit order ${editingOrder.code}` : 'Record an accepted delivery'}</h2>
         <div className="rounded-xl bg-muted p-3 text-sm md:col-span-2"><p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Order ID</p><p className="mt-1 font-mono font-bold">Auto-generated on save</p><p className="mt-1 text-xs text-muted-foreground">Platform + DDMMYYYY + four-digit daily sequence, for example SWG170920260001.</p></div>
         <label className="text-sm font-semibold">Platform<select value={form.platform_id} onChange={event => setForm({ ...form, platform_id: event.target.value, pickup_place_id: '' })} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{(platforms ?? []).map(platform => <option key={platform.id} value={platform.id}>{platform.name}</option>)}</select></label>
         <label className="text-sm font-semibold">Pickup point<select required value={form.pickup_place_id} onChange={event => setForm({ ...form, pickup_place_id: event.target.value })} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><option value="">Select restaurant, hub or dark store</option>{availablePlaces.map(place => <option key={place.id} value={place.id}>{place.name} · {place.type}</option>)}</select><span className="mt-1 block text-xs font-normal text-muted-foreground">Saved pickup GPS: {availablePlaces.find(place => place.id === form.pickup_place_id)?.latitude != null ? 'coordinates available' : 'add coordinates in Places'}</span></label>
@@ -142,7 +171,7 @@ export default function Orders() {
         <label className="text-sm font-semibold">Payment type<select value={form.payment_type} onChange={event => setForm({ ...form, payment_type: event.target.value })} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><option value="PREPAID">Prepaid</option><option value="COD">COD — collect at delivery</option></select></label>
         {form.payment_type === 'COD' && <Field label="COD amount to collect ₹" type="number" value={form.cod_amount} onChange={value => setForm({ ...form, cod_amount: value })} required />}
         <label className="text-sm font-semibold md:col-span-2">Notes<textarea value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} className="mt-2 min-h-24 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>
-        <div className="flex gap-2 md:col-span-2"><button disabled={saving} className="rounded-xl bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{saving ? 'Saving…' : 'Save order'}</button><button type="button" onClick={() => setOpen(false)} className="rounded-xl bg-muted px-5 py-3 font-bold text-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Cancel</button></div>
+        <div className="flex gap-2 md:col-span-2"><button disabled={saving} className="rounded-xl bg-primary px-5 py-3 font-bold text-primary-foreground disabled:opacity-50">{saving ? 'Saving…' : editingOrder ? 'Save changes' : 'Save order'}</button><button type="button" onClick={() => { setOpen(false); setEditingOrder(null); }} className="rounded-xl bg-muted px-5 py-3 font-bold text-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Cancel</button></div>
       </form>}
 
       {message && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{message}</div>}
@@ -160,7 +189,10 @@ export default function Orders() {
           <StatusBadge status={order.status} />
           <span className="truncate text-sm" title={order.drop_address || ''}>{order.drop_address || 'No drop address'}</span>
           <strong className="tabular-nums">₹{Number(order.earning).toFixed(0)}</strong>
-          <button aria-label={`Delete ${order.code}`} onClick={() => deleteOrder(order)} className="rounded-lg p-2 text-destructive transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Trash2" className="h-4 w-4" /></button>
+          <div className="flex gap-1">
+            <button aria-label={`Edit ${order.code}`} onClick={() => startEdit(order)} className="rounded-lg p-2 transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Pencil" className="h-4 w-4" /></button>
+            <button aria-label={`Delete ${order.code}`} onClick={() => deleteOrder(order)} className="rounded-lg p-2 text-destructive transition hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Trash2" className="h-4 w-4" /></button>
+          </div>
         </div>)}
       </div>}
     </div>

@@ -10,6 +10,7 @@ export const nav = { icon: 'ChartNoAxesCombined', label: 'Insights', section: 'O
 export default function Insights() {
   const { data: orders, loading: ordersLoading, error: ordersError, run: reloadOrders } = useLocalQuery('SELECT * FROM orders ORDER BY created_at DESC', [], []);
   const { data: events, loading: eventsLoading, error: eventsError, run: reloadEvents } = useLocalQuery('SELECT * FROM gps_events ORDER BY captured_at DESC', [], []);
+  const { data: places, loading: placesLoading, error: placesError, run: reloadPlaces } = useLocalQuery('SELECT * FROM places ORDER BY name', [], []);
   const delivered = (orders ?? []).filter(order => order.status === 'Delivered');
   const earnings = delivered.reduce((sum, order) => sum + Number(order.earning || 0), 0);
   const distance = delivered.reduce((sum, order) => sum + Number(order.distance_km || 0), 0);
@@ -26,14 +27,29 @@ export default function Insights() {
   const customerTravel = customerTravelRows.length ? customerTravelRows.reduce((sum, order) => sum + elapsedMinutes(order.picked_up_at, order.arrived_customer_at), 0) / customerTravelRows.length : 0;
   const pickupTravel = pickupTravelRows.length ? pickupTravelRows.reduce((sum, order) => sum + elapsedMinutes(order.accepted_at, order.arrived_pickup_at), 0) / pickupTravelRows.length : 0;
   const gps = (events ?? []).filter(event => Number.isFinite(Number(event.latitude)) && Number.isFinite(Number(event.longitude)));
-  const center = useMemo(() => gps.length ? [Number(gps[0].latitude), Number(gps[0].longitude)] : null, [gps]);
+  const allocationHotspots = useMemo(() => {
+    const counts = new Map();
+    (orders ?? []).forEach(order => {
+      if (!order.pickup_place_id) return;
+      counts.set(order.pickup_place_id, (counts.get(order.pickup_place_id) || 0) + 1);
+    });
+    return (places ?? [])
+      .filter(place => Number.isFinite(Number(place.latitude)) && Number.isFinite(Number(place.longitude)))
+      .map(place => ({ ...place, allocationCount: counts.get(place.id) || 0 }))
+      .filter(place => place.allocationCount > 0)
+      .sort((a, b) => b.allocationCount - a.allocationCount);
+  }, [orders, places]);
+  const center = useMemo(() => allocationHotspots.length
+    ? [Number(allocationHotspots[0].latitude), Number(allocationHotspots[0].longitude)]
+    : gps.length ? [Number(gps[0].latitude), Number(gps[0].longitude)] : null,
+  [allocationHotspots, gps]);
   const platformTotals = {};
   delivered.forEach(order => { const key = order.platform_id || 'Unassigned'; platformTotals[key] = (platformTotals[key] || 0) + Number(order.earning || 0); });
   const maxPlatform = Math.max(1, ...Object.values(platformTotals));
-  const error = ordersError || eventsError;
+  const error = ordersError || eventsError || placesError;
 
   return <div className="space-y-6"><header><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Your operational memory</p><h1 className="font-heading text-5xl font-bold">Shift intelligence</h1><p className="mt-2 text-muted-foreground">Every metric below is calculated from your local SQLite records.</p></header>
-    {ordersLoading || eventsLoading ? <Loading /> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-destructive">{error.message}<button onClick={() => { reloadOrders(); reloadEvents(); }} className="ml-3 underline">Retry</button></div> : <>
+    {ordersLoading || eventsLoading || placesLoading ? <Loading /> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-destructive">{error.message}<button onClick={() => { reloadOrders(); reloadEvents(); reloadPlaces(); }} className="ml-3 underline">Retry</button></div> : <>
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Delivered earnings" value={`₹${earnings.toFixed(0)}`} icon="IndianRupee" /><Stat label="Distance recorded" value={`${distance.toFixed(1)} km`} icon="Route" /><Stat label="Avg delivery time" value={formatMinutes(avgDelivery)} icon="Clock" /><Stat label="Earning / km" value={`₹${(distance ? earnings / distance : 0).toFixed(1)}`} icon="TrendingUp" /></section>
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Pickup travel" value={formatMinutes(pickupTravel)} icon="Navigation" /><Stat label="Pickup wait" value={formatMinutes(pickupWait)} icon="Timer" /><Stat label="Customer travel" value={formatMinutes(customerTravel)} icon="Bike" /><Stat label="Customer handoff" value={formatMinutes(customerWait)} icon="Handshake" /></section>
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="GPS tracking points" value={gpsTrackingPoints} icon="Radar" /><Stat label="Milestone points" value={milestonePoints} icon="MapPin" /><Stat label="Completed orders" value={delivered.length} icon="PackageCheck" /><Stat label="Average earning" value={`₹${(delivered.length ? earnings / delivered.length : 0).toFixed(0)}`} icon="IndianRupee" /></section>
