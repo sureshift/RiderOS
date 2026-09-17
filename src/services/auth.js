@@ -1,9 +1,14 @@
-import { loginUser, registerUser } from './localDb';
+import { loginUser, createUser } from './localDb';
 
 let currentUser = null;
 const subscribers = [];
 
-export { loginUser, registerUser };
+export { loginUser, createUser as registerUser };
+export async function logoutUser() {
+  currentUser = null;
+  localStorage.removeItem('auth_user');
+  notifySubscribers();
+}
 
 export function subscribe(callback) {
   subscribers.push(callback);
@@ -29,7 +34,7 @@ export async function login(email, password) {
 }
 
 export async function signup(email, password, name) {
-  const user = await registerUser(email, password, name);
+  const user = await createUser(email, password, name);
   if (user) {
     currentUser = user;
     localStorage.setItem('auth_user', JSON.stringify(user));
@@ -39,11 +44,7 @@ export async function signup(email, password, name) {
   return null;
 }
 
-export async function logout() {
-  currentUser = null;
-  localStorage.removeItem('auth_user');
-  notifySubscribers();
-}
+export { logoutUser as logout };
 
 export function getCurrentUser() {
   if (currentUser) return currentUser;
