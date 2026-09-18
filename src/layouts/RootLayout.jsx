@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useCallback } from 'react';
 import { Outlet, useLocation, useMatches, useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
-import { logoutUser } from '@/services/auth';
+import { logoutUser, initializeAuth, subscribe } from '@/services/auth';
 import { setUser, clearUser, setInitialized } from '@/store/userSlice';
 import { verifyRouteAccess } from '@/router/route.utils';
 import { APP_CONFIG, AUTH_PROFILES, GENERIC_AUTH } from '@/config/app.config';
@@ -34,10 +34,10 @@ export default function RootLayout() {
     hasInitRef.current = true;
 
     let isMounted = true;
+    let unsubscribe = () => {};
     const init = async () => {
       try {
-        const storedUser = localStorage.getItem('auth_user');
-        const currentUser = storedUser ? JSON.parse(storedUser) : null;
+        const currentUser = await initializeAuth();
         if (!isMounted) return;
         if (currentUser) {
           dispatch(setUser(currentUser));
@@ -45,12 +45,18 @@ export default function RootLayout() {
         } else {
           dispatch(setInitialized());
         }
-      } catch {
+        unsubscribe = subscribe(({ user: nextUser }) => {
+          if (!isMounted) return;
+          if (nextUser) dispatch(setUser(nextUser));
+          else dispatch(clearUser());
+        });
+      } catch (error) {
+        console.error('Supabase auth initialization failed:', error);
         if (isMounted) dispatch(setInitialized());
       }
     };
     init();
-    return () => { isMounted = false; };
+    return () => { isMounted = false; unsubscribe(); };
   }, [dispatch]);
 
   function handlePostAuthNavigation() {
