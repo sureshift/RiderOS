@@ -1,10 +1,10 @@
-// -- Local database adapter --
-import { localAdapter } from './localAdapter.js';
+// -- Supabase cloud database adapter --
+import { supabaseAdapter } from './supabaseAdapter.js';
 
-const dummyCoreSDK = {
+const coreSDK = {
   CoreSDK: {
     createClient: async (adapter) => adapter,
   }
 };
 
-export const sdk = await dummyCoreSDK.CoreSDK.createClient(localAdapter);
+export const sdk = await coreSDK.CoreSDK.createClient(supabaseAdapter);
