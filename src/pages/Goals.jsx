@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
-import { useLocalQuery } from '@/hooks/useLocalTable';
-import { insert, remove, update } from '@/services/localDb';
+import { useSupabaseQuery } from '@/hooks/useSupabaseQuery';
+import { supabase } from '@/services/supabaseClient';
 import { getGoalMetrics, getOrderIntensity } from '@/services/allocation';
 
 export const route = { path: '/goals', layout: 'owner', access: 'public' };
@@ -14,9 +14,9 @@ export default function Goals() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [form, setForm] = useState(emptyForm());
-  const { data: goals, loading, error, run } = useLocalQuery('SELECT * FROM goals ORDER BY created_at DESC', [], []);
-  const { data: deliveredOrders } = useLocalQuery("SELECT id, earning, delivered_at, created_at FROM orders WHERE status = 'Delivered'", [], []);
-  const { data: activeOrders } = useLocalQuery("SELECT id FROM orders WHERE status NOT IN ('Delivered','Cancelled')", [], []);
+  const { data: goals, loading, error, run } = useSupabaseQuery(() => supabase.from('goals').select('*').order('created_at', { ascending: false }), []);
+  const { data: deliveredOrders } = useSupabaseQuery(() => supabase.from('orders').select('id, earning, delivered_at, created_at').eq('status', 'Delivered'), []);
+  const { data: activeOrders } = useSupabaseQuery(() => supabase.from('orders').select('id').not('status', 'in', '("Delivered","Cancelled")'), []);
   const rows = goals ?? [];
   const delivered = deliveredOrders ?? [];
   const openOrders = activeOrders ?? [];
@@ -31,14 +31,23 @@ export default function Goals() {
     event.preventDefault();
     setSaving(true);
     try {
-      const values = { name: form.name.trim(), target: Number(form.target), saved: Number(form.saved || 0), deadline: form.deadline || null, rule: form.rule, rule_value: Number(form.rule_value || 0), active: form.active ? 1 : 0 };
-      if (editing) await update('goals', editing.id, values); else await insert('goals', values, 'goal');
+      const values = { name: form.name.trim(), target: Number(form.target), saved: Number(form.saved || 0), deadline: form.deadline || null, rule: form.rule, rule_value: Number(form.rule_value || 0), active: Boolean(form.active) };
+      const { error: saveError } = editing
+        ? await supabase.from('goals').update({ ...values, updated_at: new Date().toISOString() }).eq('id', editing.id)
+        : await supabase.from('goals').insert(values);
+      if (saveError) throw saveError;
       setOpen(false);
       setMessage(editing ? 'Goal updated.' : 'Goal created.');
       await run();
     } catch (err) { setMessage(err.message || 'Could not save the goal.'); } finally { setSaving(false); }
   }
-  async function deleteGoal(goal) { if (!window.confirm(`Delete ${goal.name}?`)) return; await remove('goals', goal.id); setMessage('Goal deleted.'); await run(); }
+  async function deleteGoal(goal) {
+    if (!window.confirm(`Delete ${goal.name}?`)) return;
+    const { error: deleteError } = await supabase.from('goals').delete().eq('id', goal.id);
+    if (deleteError) { setMessage(deleteError.message || 'Could not delete the goal.'); return; }
+    setMessage('Goal deleted.');
+    await run();
+  }
 
   return <div className="space-y-6"><header className="flex flex-wrap items-end justify-between gap-4"><div><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Give earnings a purpose</p><h1 className="font-heading text-5xl font-bold">Goals & money</h1><p className="mt-2 text-muted-foreground">Keep savings targets and allocation rules beside your delivery data.</p></div><button onClick={create} className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ApperIcon name="Plus" /> New goal</button></header>
     <section className="grid gap-4 md:grid-cols-3"><Stat label="Saved" value={`₹${saved.toLocaleString('en-IN')}`} /><Stat label="Combined target" value={`₹${target.toLocaleString('en-IN')}`} /><Stat label="Funded" value={`${target ? Math.min(100, Math.round(saved / target * 100)) : 0}%`} /></section>
@@ -54,4 +63,3 @@ function Stat({ label, value }) { return <div className="rounded-3xl border bord
 function GoalMetric({ label, value }) { return <div className="rounded-2xl bg-muted p-3"><span className="block text-xs text-muted-foreground">{label}</span><strong className="mt-1 block text-sm tabular-nums">{value}</strong></div>; }
 function Field({ label, value, onChange, type = 'text', min, step, required }) { return <label className="text-sm font-semibold">{label}<input required={required} type={type} min={min} step={step} value={value} onChange={event => onChange(event.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>; }
 function Select({ label, value, options, onChange }) { return <label className="text-sm font-semibold">{label}<select value={value} onChange={event => onChange(event.target.value)} className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{options.map(option => <option key={option}>{option}</option>)}</select></label>; }
-

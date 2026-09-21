@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import ApperIcon from '@/components/ApperIcon';
-import { useLocalQuery } from '@/hooks/useLocalTable';
-import { insert, query, update } from '@/services/localDb';
-
+import { useSupabaseQuery } from '@/hooks/useSupabaseQuery';
+import { supabase } from '@/services/supabaseClient';
 
 const SLICE_KEY = 'rideros.slice.account';
 
@@ -13,6 +12,10 @@ export const nav = { icon: 'Route', label: 'Live run', section: 'Operations', or
 const PHASES = ['Allocated', 'En Route Pickup', 'Arrived Pickup', 'Picked Up', 'En Route Customer', 'Arrived Customer', 'Delivered'];
 const TRACKING_INTERVAL_MS = 30000;
 
+function flattenOrder(row) {
+  return { ...row, platform_name: row.platforms?.name, pickup_name: row.places?.name };
+}
+
 export default function LiveRun() {
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
@@ -20,21 +23,24 @@ export default function LiveRun() {
   const [paymentNotice, setPaymentNotice] = useState('');
   const [upiPayload, setUpiPayload] = useState(null);
   const trackingOrderRef = useRef(null);
-  const { data: orders, loading, error, run } = useLocalQuery(
-    `SELECT o.*, p.name AS platform_name, pl.name AS pickup_name
-     FROM orders o
-     LEFT JOIN platforms p ON p.id = o.platform_id
-     LEFT JOIN places pl ON pl.id = o.pickup_place_id
-     WHERE o.status NOT IN ('Delivered','Cancelled')
-     ORDER BY o.created_at ASC`,
-    [],
+  const { data: rawOrders, loading, error, run } = useSupabaseQuery(
+    () => supabase
+      .from('orders')
+      .select('*, platforms(name), places(name)')
+      .not('status', 'in', '("Delivered","Cancelled")')
+      .order('created_at', { ascending: true }),
     []
   );
-  const active = orders ?? [];
-  const { data: goals } = useLocalQuery('SELECT * FROM goals WHERE active = 1 ORDER BY created_at DESC', [], []);
-  const { data: deliveredOrders } = useLocalQuery("SELECT earning, delivered_at, created_at FROM orders WHERE status = 'Delivered'", [], []);
+  const active = useMemo(() => (rawOrders ?? []).map(flattenOrder), [rawOrders]);
+  const { data: goals } = useSupabaseQuery(() => supabase.from('goals').select('*').eq('active', true).order('created_at', { ascending: false }), []);
+  const { data: deliveredOrders } = useSupabaseQuery(() => supabase.from('orders').select('earning, delivered_at, created_at').eq('status', 'Delivered'), []);
   const current = useMemo(() => active[0], [active]);
-  const { data: paymentRows, run: runPayments } = useLocalQuery('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [current?.id ?? ''], [current?.id]);
+  const { data: paymentRows, run: runPayments } = useSupabaseQuery(
+    () => current?.id
+      ? supabase.from('payments').select('*').eq('order_id', current.id).order('created_at', { ascending: false })
+      : Promise.resolve({ data: [], error: null }),
+    [current?.id]
+  );
   const currentPayment = paymentRows?.[0];
 
   useEffect(() => {
@@ -72,7 +78,7 @@ export default function LiveRun() {
         const capturedAt = new Date().toISOString();
         const orderId = trackingOrderRef.current;
         if (!orderId || cancelled) return;
-        await insert('gps_events', {
+        const { error: insertError } = await supabase.from('gps_events').insert({
           order_id: orderId,
           trip_id: null,
           event_type: 'tracking',
@@ -81,9 +87,11 @@ export default function LiveRun() {
           accuracy_m: location.accuracy,
           captured_at: capturedAt,
           source: location.source
-        }, 'gps');
+        });
+        if (insertError) throw insertError;
         const distance = await calculateOrderDistance(orderId);
-        await update('orders', orderId, { distance_km: Number(distance.toFixed(3)) });
+        const { error: updateError } = await supabase.from('orders').update({ distance_km: Number(distance.toFixed(3)) }).eq('id', orderId);
+        if (updateError) throw updateError;
         if (!cancelled) {
           setTrackingState({ active: true, lastCapturedAt: capturedAt, error: '' });
           await run();
@@ -112,7 +120,14 @@ export default function LiveRun() {
     setNotice('');
     try {
       if (nextStatus === 'Delivered' && order.payment_type === 'COD') {
-        const payment = (await query('SELECT status FROM payments WHERE order_id = ? ORDER BY created_at DESC LIMIT 1', [order.id]))[0];
+        const { data: paymentCheck, error: paymentError } = await supabase
+          .from('payments')
+          .select('status')
+          .eq('order_id', order.id)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        if (paymentError) throw paymentError;
+        const payment = paymentCheck?.[0];
         if (!payment || payment.status !== 'PAID') {
           setPaymentNotice(`Collect ₹${Number(order.cod_amount || 0).toFixed(2)} before marking ${order.code} delivered.`);
           return;
@@ -128,7 +143,7 @@ export default function LiveRun() {
         'Arrived Customer': 'arrived_customer',
         Delivered: 'delivered'
       }[nextStatus] || 'milestone';
-      await insert('gps_events', {
+      const { error: gpsError } = await supabase.from('gps_events').insert({
         order_id: order.id,
         trip_id: null,
         event_type: eventType,
@@ -137,7 +152,8 @@ export default function LiveRun() {
         accuracy_m: location.accuracy,
         captured_at: capturedAt,
         source: location.source
-      }, 'gps');
+      });
+      if (gpsError) throw gpsError;
 
       const fields = { status: nextStatus };
       if (nextStatus === 'Arrived Pickup') fields.arrived_pickup_at = capturedAt;
@@ -154,7 +170,8 @@ export default function LiveRun() {
         fields.duration_min = Number(((new Date(capturedAt) - new Date(order.accepted_at)) / 60000).toFixed(2));
         fields.distance_km = Number((await calculateOrderDistance(order.id)).toFixed(3));
       }
-      await update('orders', order.id, fields);
+      const { error: updateError } = await supabase.from('orders').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', order.id);
+      if (updateError) throw updateError;
       setNotice(`${order.code}: ${nextStatus}. GPS milestone saved.`);
       await run();
     } catch (err) {
@@ -168,7 +185,8 @@ export default function LiveRun() {
     if (order.payment_type !== 'COD') return;
     const amount = Number(order.cod_amount || 0);
     if (!amount) return setPaymentNotice('COD amount is missing on this order.');
-    await insert('payments', { order_id: order.id, amount, method: 'cash', status: 'PAID', paid_at: new Date().toISOString(), notes: 'Cash collected by rider' }, 'pay');
+    const { error: insertError } = await supabase.from('payments').insert({ order_id: order.id, amount, method: 'cash', status: 'PAID', paid_at: new Date().toISOString(), notes: 'Cash collected by rider' });
+    if (insertError) { setPaymentNotice(insertError.message || 'Could not record the payment.'); return; }
     setPaymentNotice(`Cash ₹${amount.toFixed(2)} recorded as collected.`);
     await runPayments();
   }
@@ -191,7 +209,8 @@ export default function LiveRun() {
   async function confirmUpiPaid(order) {
     const amount = Number(order.cod_amount || 0);
     const reference = window.prompt('Enter the UPI transaction / UTR reference (optional). Leave blank if you only want to mark the amount received.');
-    await insert('payments', { order_id: order.id, amount, method: 'upi', status: 'PAID', upi_reference: reference?.trim() || null, paid_at: new Date().toISOString(), notes: 'UPI payment received and confirmed by rider' }, 'pay');
+    const { error: insertError } = await supabase.from('payments').insert({ order_id: order.id, amount, method: 'upi', status: 'PAID', upi_reference: reference?.trim() || null, paid_at: new Date().toISOString(), notes: 'UPI payment received and confirmed by rider' });
+    if (insertError) { setPaymentNotice(insertError.message || 'Could not record the payment.'); return; }
     setUpiPayload(null);
     setPaymentNotice(`UPI ₹${amount.toFixed(2)} marked as received.`);
     await runPayments();
@@ -217,8 +236,8 @@ function RunCard({ order, busy, onAdvance }) {
 
   useEffect(() => {
     let cancelled = false;
-    query('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [order.id]).then(rows => {
-      if (!cancelled) setPaymentRows(rows);
+    supabase.from('payments').select('*').eq('order_id', order.id).order('created_at', { ascending: false }).then(({ data, error }) => {
+      if (!cancelled && !error) setPaymentRows(data || []);
     });
     return () => { cancelled = true; };
   }, [order.id, order.status]);
@@ -237,18 +256,22 @@ function RunCard({ order, busy, onAdvance }) {
   async function collectCash() {
     const amount = Number(order.cod_amount || 0);
     if (!amount) return setPaymentMessage('COD amount is missing on this order.');
-    await insert('payments', { order_id: order.id, amount, method: 'cash', status: 'PAID', paid_at: new Date().toISOString(), notes: 'Cash collected by rider' }, 'pay');
+    const { error } = await supabase.from('payments').insert({ order_id: order.id, amount, method: 'cash', status: 'PAID', paid_at: new Date().toISOString(), notes: 'Cash collected by rider' });
+    if (error) { setPaymentMessage(error.message || 'Could not record the payment.'); return; }
     setPaymentMessage(`Cash ₹${amount.toFixed(2)} marked as received.`);
-    setPaymentRows(await query('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [order.id]));
+    const { data } = await supabase.from('payments').select('*').eq('order_id', order.id).order('created_at', { ascending: false });
+    setPaymentRows(data || []);
   }
 
   async function markUpiReceived() {
     const amount = Number(order.cod_amount || 0);
     const reference = window.prompt('Enter the UPI transaction / UTR reference (optional). Leave blank if you only want to mark the amount received.');
-    await insert('payments', { order_id: order.id, amount, method: 'upi', status: 'PAID', upi_reference: reference?.trim() || null, paid_at: new Date().toISOString(), notes: 'UPI payment received and confirmed by rider' }, 'pay');
+    const { error } = await supabase.from('payments').insert({ order_id: order.id, amount, method: 'upi', status: 'PAID', upi_reference: reference?.trim() || null, paid_at: new Date().toISOString(), notes: 'UPI payment received and confirmed by rider' });
+    if (error) { setPaymentMessage(error.message || 'Could not record the payment.'); return; }
     setUpiPayload(null);
     setPaymentMessage(`UPI ₹${amount.toFixed(2)} marked as received.`);
-    setPaymentRows(await query('SELECT * FROM payments WHERE order_id = ? ORDER BY created_at DESC', [order.id]));
+    const { data } = await supabase.from('payments').select('*').eq('order_id', order.id).order('created_at', { ascending: false });
+    setPaymentRows(data || []);
   }
   const index = PHASES.indexOf(order.status);
   const next = PHASES[index + 1];
@@ -264,7 +287,7 @@ function RunCard({ order, busy, onAdvance }) {
     ? Number(order.duration_min || 0)
     : (Date.now() - new Date(order.accepted_at).getTime()) / 60000;
 
-  return <article className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-start justify-between gap-3"><div className="min-w-0"><span className="mb-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground">{order.platform_name || 'Platform'}</span><h2 className="font-heading text-3xl font-bold">{order.code}</h2><p className="text-sm text-muted-foreground">Pickup: {order.pickup_name || order.pickup_address || 'Not assigned'}</p><p className="truncate text-sm text-muted-foreground" title={order.drop_address || ''}>Customer: {order.drop_address || 'No destination saved'}</p></div><strong className="shrink-0 text-lg tabular-nums">₹{Number(order.earning || 0).toFixed(0)}</strong></div><div className="mb-5 grid gap-3 sm:grid-cols-3"><MiniMetric label="Distance" value={`${Number(order.distance_km || 0).toFixed(2)} km`} /><MiniMetric label="Run time" value={formatDuration(elapsed)} /><MiniMetric label="Payment" value={order.payment_type === 'COD' ? `COD ₹${Number(order.cod_amount || 0).toFixed(0)}` : 'Prepaid'} /></div><div className="mb-6 space-y-2">{PHASES.map((phase, step) => <div key={phase} className="flex items-center gap-3"><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${step < index ? 'bg-success text-success-foreground' : step === index ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{step < index ? <ApperIcon name="Check" /> : step + 1}</span><span className={step === index ? 'font-bold' : 'text-sm text-muted-foreground'}>{phase}</span>{step === index && <span className="ml-auto text-xs font-bold text-primary">CURRENT</span>}</div>)}</div>{next === 'Delivered' && order.payment_type === 'COD' && <div className="mb-4 rounded-2xl border border-border bg-muted p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wide text-primary">Before delivery — COD collection</p><p className="mt-1 font-heading text-2xl font-bold">Collect ₹{Number(order.cod_amount || 0).toFixed(2)}</p><p className="mt-1 text-xs text-muted-foreground">Cash or Slice UPI. Delivery stays locked until the amount is marked received.</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${payment?.status === 'PAID' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{payment?.status === 'PAID' ? 'PAID' : 'PAYMENT DUE'}</span></div><div className="mt-3 grid gap-2 sm:grid-cols-3"><button onClick={collectCash} disabled={payment?.status === 'PAID'} className="rounded-xl bg-foreground px-4 py-3 font-bold text-background disabled:opacity-50"><ApperIcon name="Banknote" className="mr-2 inline h-4 w-4" />Collect cash</button><button onClick={showSliceQr} disabled={payment?.status === 'PAID'} className="rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50"><ApperIcon name="QrCode" className="mr-2 inline h-4 w-4" />Show Slice QR</button><button onClick={markUpiReceived} disabled={payment?.status === 'PAID'} className="rounded-xl border border-border px-4 py-3 font-bold disabled:opacity-50">Mark amount received</button></div>{upiPayload && <div className="mt-4 grid gap-4 rounded-2xl bg-background p-4 sm:grid-cols-[auto_1fr] sm:items-center"><div className="rounded-2xl bg-card p-3"><QRCodeCanvas value={upiPayload.paymentUri} size={220} includeMargin /></div><div><p className="text-sm font-bold">Scan to pay ₹{Number(upiPayload.amount).toFixed(2)}</p><p className="mt-1 text-xs text-muted-foreground">{upiPayload.payee} · {upiPayload.vpa}</p><p className="mt-3 text-xs leading-relaxed text-muted-foreground">Verify the successful credit in the Slice app, then tap “Mark amount received”.</p></div></div>}{paymentMessage && <p className="mt-3 text-sm font-semibold text-muted-foreground">{paymentMessage}</p>}</div>}<div className="rounded-2xl bg-muted p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next rider action</p><p className="mt-1 text-sm font-semibold">{actionLabels[next] || 'Delivery complete'}</p><button disabled={busy || !next || (next === 'Delivered' && order.payment_type === 'COD' && payment?.status !== 'PAID')} onClick={() => onAdvance(order)} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-50">{busy ? 'Saving GPS…' : actionLabels[next] || 'Delivered'}<ApperIcon name="MapPin" /></button>{next === 'Delivered' && order.payment_type === 'COD' && payment?.status !== 'PAID' && <p className="mt-2 text-center text-xs font-semibold text-destructive">Mark the COD amount received before completing delivery.</p>}</div></article>;
+  return <article className="rounded-3xl border border-border bg-card p-5 md:p-6"><div className="mb-5 flex items-start justify-between gap-3"><div className="min-w-0"><span className="mb-2 inline-flex rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground">{order.platform_name || 'Platform'}</span><h2 className="font-heading text-3xl font-bold">{order.code}</h2><p className="text-sm text-muted-foreground">Pickup: {order.pickup_name || order.pickup_address || 'Not assigned'}</p><p className="truncate text-sm text-muted-foreground" title={order.drop_address || ''}>Customer: {order.drop_address || 'No destination saved'}</p></div><strong className="shrink-0 text-lg tabular-nums">₹{Number(order.earning || 0).toFixed(0)}</strong></div><div className="mb-5 grid gap-3 sm:grid-cols-3"><MiniMetric label="Distance" value={`${Number(order.distance_km || 0).toFixed(2)} km`} /><MiniMetric label="Run time" value={formatDuration(elapsed)} /><MiniMetric label="Payment" value={order.payment_type === 'COD' ? `COD ₹${Number(order.cod_amount || 0).toFixed(0)}` : 'Prepaid'} /></div><div className="mb-6 space-y-2">{PHASES.map((phase, step) => <div key={phase} className="flex items-center gap-3"><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold ${step < index ? 'bg-success text-success-foreground' : step === index ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>{step < index ? <ApperIcon name="Check" /> : step + 1}</span><span className={step === index ? 'font-bold' : 'text-sm text-muted-foreground'}>{phase}</span>{step === index && <span className="ml-auto text-xs font-bold text-primary">CURRENT</span>}</div>)}</div>{next === 'Delivered' && order.payment_type === 'COD' && <div className="mb-4 rounded-2xl border border-border bg-muted p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wide text-primary">Before delivery — COD collection</p><p className="mt-1 font-heading text-2xl font-bold">Collect ₹{Number(order.cod_amount || 0).toFixed(2)}</p><p className="mt-1 text-xs text-muted-foreground">Cash or Slice UPI. Delivery stays locked until the amount is marked received.</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${payment?.status === 'PAID' ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive'}`}>{payment?.status === 'PAID' ? 'PAID' : 'PAYMENT DUE'}</span></div><div className="mt-3 grid gap-2 sm:grid-cols-3"><button onClick={collectCash} disabled={payment?.status === 'PAID'} className="rounded-xl bg-foreground px-4 py-3 font-bold text-background disabled:opacity-50"><ApperIcon name="Banknote" className="mr-2 inline h-4 w-4" />Collect cash</button><button onClick={showSliceQr} disabled={payment?.status === 'PAID'} className="rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50"><ApperIcon name="QrCode" className="mr-2 inline h-4 w-4" />Show Slice QR</button><button onClick={markUpiReceived} disabled={payment?.status === 'PAID'} className="rounded-xl border border-border px-4 py-3 font-bold disabled:opacity-50">Mark amount received</button></div>{upiPayload && <div className="mt-4 grid gap-4 rounded-2xl bg-background p-4 sm:grid-cols-[auto_1fr] sm:items-center"><div className="rounded-2xl bg-card p-3"><QRCodeCanvas value={upiPayload.paymentUri} size={220} includeMargin /></div><div><p className="text-sm font-bold">Scan to pay ₹{Number(upiPayload.amount).toFixed(2)}</p><p className="mt-1 text-xs text-muted-foreground">{upiPayload.payee} · {upiPayload.vpa}</p><p className="mt-3 text-xs leading-relaxed text-muted-foreground">Verify the successful credit in the Slice app, then tap "Mark amount received".</p></div></div>}{paymentMessage && <p className="mt-3 text-sm font-semibold text-muted-foreground">{paymentMessage}</p>}</div>}<div className="rounded-2xl bg-muted p-4"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Next rider action</p><p className="mt-1 text-sm font-semibold">{actionLabels[next] || 'Delivery complete'}</p><button disabled={busy || !next || (next === 'Delivered' && order.payment_type === 'COD' && payment?.status !== 'PAID')} onClick={() => onAdvance(order)} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] disabled:opacity-50">{busy ? 'Saving GPS…' : actionLabels[next] || 'Delivered'}<ApperIcon name="MapPin" /></button>{next === 'Delivered' && order.payment_type === 'COD' && payment?.status !== 'PAID' && <p className="mt-2 text-center text-xs font-semibold text-destructive">Mark the COD amount received before completing delivery.</p>}</div></article>;
 }
 
 function Info({ title, text }) { return <div className="rounded-2xl bg-muted p-4"><strong className="text-sm">{title}</strong><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{text}</p></div>; }
@@ -273,9 +296,10 @@ function formatDuration(minutes) { const total = Math.max(0, Math.round(Number(m
 function formatElapsedSince(iso) { if (!iso) return 'waiting'; return formatDuration((Date.now() - new Date(iso).getTime()) / 60000) + ' ago'; }
 
 async function calculateOrderDistance(orderId) {
-  const points = await query('SELECT latitude, longitude FROM gps_events WHERE order_id = ? ORDER BY captured_at ASC', [orderId]);
+  const { data: points, error } = await supabase.from('gps_events').select('latitude, longitude').eq('order_id', orderId).order('captured_at', { ascending: true });
+  if (error) throw error;
   let total = 0;
-  for (let index = 1; index < points.length; index += 1) {
+  for (let index = 1; index < (points ?? []).length; index += 1) {
     total += haversineKm(Number(points[index - 1].latitude), Number(points[index - 1].longitude), Number(points[index].latitude), Number(points[index].longitude));
   }
   return total;

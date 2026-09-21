@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import ApperIcon from '@/components/ApperIcon';
-import { useLocalQuery } from '@/hooks/useLocalTable';
+import { useSupabaseQuery } from '@/hooks/useSupabaseQuery';
+import { supabase } from '@/services/supabaseClient';
 import { CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import { divIcon } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -9,14 +10,25 @@ import 'leaflet/dist/leaflet.css';
 export const route = { path: '/dashboard', layout: 'owner', access: 'public' };
 export const nav = { icon: 'Gauge', label: 'Cockpit', section: 'Operations', order: 1 };
 
+function flattenOrder(row) {
+  return { ...row, platform_name: row.platforms?.name };
+}
+
 export default function Dashboard() {
-  const { data: orders, loading, error, run } = useLocalQuery('SELECT * FROM orders ORDER BY created_at DESC', [], []);
-  const { data: gpsEvents } = useLocalQuery('SELECT order_id, event_type, latitude, longitude, captured_at FROM gps_events WHERE order_id IS NOT NULL ORDER BY captured_at DESC', [], []);
-  const { data: goals } = useLocalQuery('SELECT * FROM goals WHERE active = 1 ORDER BY created_at DESC', [], []);
-  const active = (orders ?? []).filter(order => !['Delivered', 'Cancelled'].includes(order.status));
-  const delivered = (orders ?? []).filter(order => order.status === 'Delivered');
+  const { data: rawOrders, loading, error, run } = useSupabaseQuery(
+    () => supabase.from('orders').select('*, platforms(name)').order('created_at', { ascending: false }),
+    []
+  );
+  const orders = useMemo(() => (rawOrders ?? []).map(flattenOrder), [rawOrders]);
+  const { data: gpsEvents } = useSupabaseQuery(
+    () => supabase.from('gps_events').select('order_id, event_type, latitude, longitude, captured_at').not('order_id', 'is', null).order('captured_at', { ascending: false }),
+    []
+  );
+  const { data: goals } = useSupabaseQuery(() => supabase.from('goals').select('*').eq('active', true).order('created_at', { ascending: false }), []);
+  const active = orders.filter(order => !['Delivered', 'Cancelled'].includes(order.status));
+  const delivered = orders.filter(order => order.status === 'Delivered');
   const earnings = delivered.reduce((sum, order) => sum + Number(order.earning || 0), 0);
-  const distance = (orders ?? []).reduce((sum, order) => sum + Number(order.distance_km || 0), 0);
+  const distance = orders.reduce((sum, order) => sum + Number(order.distance_km || 0), 0);
   const avgDeliveryMinutes = delivered.length ? delivered.reduce((sum, order) => sum + Number(order.duration_min || 0), 0) / delivered.length : 0;
   const pickupWaitRows = delivered.filter(order => order.arrived_pickup_at && order.picked_up_at);
   const avgPickupMinutes = pickupWaitRows.length
@@ -32,12 +44,12 @@ export default function Dashboard() {
     <section className="flex flex-col justify-between gap-4 border-b border-border pb-5 md:flex-row md:items-end"><div><p className="mb-1 text-xs font-bold uppercase tracking-[.16em] text-primary">Operations overview</p><h1 className="font-heading text-4xl font-bold tracking-tight md:text-5xl">Good evening. Here is your shift.</h1><p className="mt-1 text-sm text-muted-foreground">Monitor orders, active runs and earnings from one control center.</p></div><Link to="/orders" className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Create order <ApperIcon name="Plus" /></Link></section>
     <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Today's earnings" value={`₹${earnings.toLocaleString('en-IN')}`} detail={`${delivered.length} delivered`} icon="IndianRupee" /><Metric label="Active orders" value={active.length} detail="Need attention or movement" icon="Package" /><Metric label="Distance tracked" value={`${distance.toFixed(1)} km`} detail="GPS route distance" icon="Route" /><Metric label="Avg delivery time" value={formatMinutes(avgDeliveryMinutes)} detail="Allocation → delivery" icon="Clock" /></section>
     <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Pickup wait" value={formatMinutes(avgPickupMinutes)} detail="Arrival → picked up" icon="Timer" /><Metric label="Earning / km" value={`₹${(distance ? earnings / distance : 0).toFixed(1)}`} detail="Completed delivery route" icon="TrendingUp" /><Metric label="GPS points" value={(gpsEvents ?? []).length} detail="Milestones + 30s tracking" icon="MapPinned" /><Metric label="Goal progress" value={`${goalProgress}%`} detail={`${(goals ?? []).length} active goals`} icon="Target" /></section>
-    <DeliveryHeatmap orders={orders ?? []} gpsEvents={gpsEvents ?? []} />
+    <DeliveryHeatmap orders={orders} gpsEvents={gpsEvents ?? []} />
     <section className="grid gap-4 xl:grid-cols-[1.4fr_.6fr]">
       <div className="overflow-hidden rounded-2xl border border-border bg-card"><div className="flex items-center justify-between border-b border-border px-5 py-4"><div><h2 className="font-heading text-xl font-semibold">Orders requiring attention</h2><p className="text-xs text-muted-foreground">Your current operational queue</p></div><Link to="/orders" className="text-xs font-bold text-primary hover:underline">View all orders</Link></div>{loading ? <Loading /> : error ? <ErrorState message={error.message} retry={run} /> : active.length === 0 ? <Empty icon="PackageOpen" text="No active deliveries. Add an order when you accept your next job." href="/orders" action="Add order" /> : <div className="divide-y divide-border">{active.slice(0, 7).map(order => <div key={order.id} className="grid gap-3 px-5 py-3.5 md:grid-cols-[1.15fr_.9fr_1fr_auto] md:items-center"><div className="min-w-0"><strong className="block truncate text-sm">{order.code}</strong><span className="text-xs text-muted-foreground">{order.platform_name || 'Platform'} · {order.drop_address || 'No destination'}</span></div><Status status={order.status} /><span className="truncate text-xs text-muted-foreground">{order.pickup_address || 'Pickup not entered'}</span><strong className="tabular-nums text-sm">₹{Number(order.earning || 0).toFixed(0)}</strong></div>)}</div>}</div>
-      <div className="rounded-2xl border border-border bg-card"><div className="border-b border-border px-5 py-4"><h2 className="font-heading text-xl font-semibold">Shift shortcuts</h2><p className="text-xs text-muted-foreground">Common actions</p></div><div className="divide-y divide-border"><QuickAction href="/live-run" icon="Radar" title="Open live operations" text="Track current rider movement" /><QuickAction href="/places" icon="MapPinned" title="Manage network" text="Platforms, hubs and stores" /><QuickAction href="/insights" icon="ChartNoAxesCombined" title="Review analytics" text="Earnings and delivery trends" /><QuickAction href="/settings" icon="HardDrive" title="Backup database" text="Export your local SQLite file" /></div></div>
+      <div className="rounded-2xl border border-border bg-card"><div className="border-b border-border px-5 py-4"><h2 className="font-heading text-xl font-semibold">Shift shortcuts</h2><p className="text-xs text-muted-foreground">Common actions</p></div><div className="divide-y divide-border"><QuickAction href="/live-run" icon="Radar" title="Open live operations" text="Track current rider movement" /><QuickAction href="/places" icon="MapPinned" title="Manage network" text="Platforms, hubs and stores" /><QuickAction href="/insights" icon="ChartNoAxesCombined" title="Review analytics" text="Earnings and delivery trends" /><QuickAction href="/settings" icon="HardDrive" title="Export your data" text="Download a JSON copy from Supabase" /></div></div>
     </section>
-    <section className="grid gap-4 xl:grid-cols-[1fr_1fr]"><div className="rounded-2xl border border-border bg-card p-5"><div className="mb-4 flex items-center justify-between"><div><h2 className="font-heading text-xl font-semibold">Money goals</h2><p className="text-xs text-muted-foreground">Progress from completed work</p></div><Link to="/goals" className="text-xs font-bold text-primary hover:underline">Manage</Link></div>{(goals ?? []).length === 0 ? <Empty icon="Target" text="Create a savings target to track progress." href="/goals" action="Create goal" /> : <div className="space-y-4">{(goals ?? []).slice(0, 3).map(goal => { const percent = Math.min(100, Math.round(Number(goal.saved) / Math.max(1, Number(goal.target)) * 100)); return <div key={goal.id}><div className="mb-1.5 flex justify-between gap-3 text-sm"><strong>{goal.name}</strong><span className="font-bold tabular-nums">{percent}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percent}%` }} /></div><div className="mt-1 flex justify-between text-xs text-muted-foreground"><span>₹{Number(goal.saved).toLocaleString('en-IN')}</span><span>₹{Number(goal.target).toLocaleString('en-IN')}</span></div></div>; })}</div>}</div><div className="rounded-2xl border border-border bg-card p-5"><div className="mb-4"><h2 className="font-heading text-xl font-semibold">Local-first status</h2><p className="text-xs text-muted-foreground">How RiderOS stores your operations</p></div><div className="grid gap-3 sm:grid-cols-3"><SystemStat icon="Database" title="SQLite" text="Primary data store" /><SystemStat icon="Map" title="GPS" text="Milestones & routes" /><SystemStat icon="Cloud" title="Backup" text="Optional cloud copy" /></div></div></section>
+    <section className="grid gap-4 xl:grid-cols-[1fr_1fr]"><div className="rounded-2xl border border-border bg-card p-5"><div className="mb-4 flex items-center justify-between"><div><h2 className="font-heading text-xl font-semibold">Money goals</h2><p className="text-xs text-muted-foreground">Progress from completed work</p></div><Link to="/goals" className="text-xs font-bold text-primary hover:underline">Manage</Link></div>{(goals ?? []).length === 0 ? <Empty icon="Target" text="Create a savings target to track progress." href="/goals" action="Create goal" /> : <div className="space-y-4">{(goals ?? []).slice(0, 3).map(goal => { const percent = Math.min(100, Math.round(Number(goal.saved) / Math.max(1, Number(goal.target)) * 100)); return <div key={goal.id}><div className="mb-1.5 flex justify-between gap-3 text-sm"><strong>{goal.name}</strong><span className="font-bold tabular-nums">{percent}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percent}%` }} /></div><div className="mt-1 flex justify-between text-xs text-muted-foreground"><span>₹{Number(goal.saved).toLocaleString('en-IN')}</span><span>₹{Number(goal.target).toLocaleString('en-IN')}</span></div></div>; })}</div>}</div><div className="rounded-2xl border border-border bg-card p-5"><div className="mb-4"><h2 className="font-heading text-xl font-semibold">Data status</h2><p className="text-xs text-muted-foreground">How RiderOS stores your operations</p></div><div className="grid gap-3 sm:grid-cols-3"><SystemStat icon="Database" title="Supabase" text="Cloud-hosted, synced live" /><SystemStat icon="Map" title="GPS" text="Milestones & routes" /><SystemStat icon="Cloud" title="Export" text="Optional JSON backup" /></div></div></section>
   </div>;
 }
 

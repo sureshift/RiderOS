@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
-import { useLocalQuery } from '@/hooks/useLocalTable';
-import { insert, remove, update } from '@/services/localDb';
+import { useSupabaseQuery } from '@/hooks/useSupabaseQuery';
+import { supabase } from '@/services/supabaseClient';
 
 export const route = { path: '/places', layout: 'owner', access: 'public' };
 export const nav = { icon: 'MapPin', label: 'Places', section: 'Operations', order: 4 };
@@ -17,8 +17,8 @@ export default function Places() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [form, setForm] = useState(emptyPlace());
-  const { data: places, loading: placesLoading, error: placesError, run: reloadPlaces } = useLocalQuery('SELECT * FROM places ORDER BY name', [], []);
-  const { data: platforms, loading: platformsLoading, error: platformsError, run: reloadPlatforms } = useLocalQuery('SELECT * FROM platforms ORDER BY name', [], []);
+  const { data: places, loading: placesLoading, error: placesError, run: reloadPlaces } = useSupabaseQuery(() => supabase.from('places').select('*').order('name'), []);
+  const { data: platforms, loading: platformsLoading, error: platformsError, run: reloadPlatforms } = useSupabaseQuery(() => supabase.from('platforms').select('*').order('name'), []);
 
   const source = tab === 'places' ? places : platforms;
   const rows = (source ?? []).filter(row => `${row.name} ${row.address ?? ''} ${row.type ?? ''} ${row.category ?? ''}`.toLowerCase().includes(search.toLowerCase()));
@@ -44,13 +44,19 @@ export default function Places() {
     try {
       if (tab === 'places') {
         const values = { name: form.name.trim(), type: form.type, address: form.address.trim(), latitude: form.latitude === '' ? null : Number(form.latitude), longitude: form.longitude === '' ? null : Number(form.longitude), platform_id: form.platform_id || null, notes: form.notes.trim() };
-        if (editing) await update('places', editing.id, values); else await insert('places', values, 'place');
+        const { error: saveError } = editing
+          ? await supabase.from('places').update({ ...values, updated_at: new Date().toISOString() }).eq('id', editing.id)
+          : await supabase.from('places').insert(values);
+        if (saveError) throw saveError;
       } else {
-        const values = { name: form.name.trim(), category: form.category, active: form.active ? 1 : 0, notes: form.notes.trim() };
-        if (editing) await update('platforms', editing.id, values); else await insert('platforms', values, 'platform');
+        const values = { name: form.name.trim(), category: form.category, active: Boolean(form.active), notes: form.notes.trim() };
+        const { error: saveError } = editing
+          ? await supabase.from('platforms').update({ ...values, updated_at: new Date().toISOString() }).eq('id', editing.id)
+          : await supabase.from('platforms').insert(values);
+        if (saveError) throw saveError;
       }
       setOpen(false);
-      setMessage(editing ? 'Changes saved locally.' : `${tab === 'places' ? 'Place' : 'Platform'} added.`);
+      setMessage(editing ? 'Changes saved.' : `${tab === 'places' ? 'Place' : 'Platform'} added.`);
       await Promise.all([reloadPlaces(), reloadPlatforms()]);
     } catch (err) {
       setMessage(err.message || 'Could not save the record.');
@@ -61,7 +67,11 @@ export default function Places() {
 
   async function deleteRecord(row) {
     if (!window.confirm(`Delete ${row.name}?`)) return;
-    await remove(tab, row.id);
+    const { error: deleteError } = await supabase.from(tab).delete().eq('id', row.id);
+    if (deleteError) {
+      setMessage(deleteError.message || 'Could not delete the record.');
+      return;
+    }
     setMessage(`${row.name} deleted.`);
     await Promise.all([reloadPlaces(), reloadPlatforms()]);
   }

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
-import { useLocalQuery } from '@/hooks/useLocalTable';
-import { insert, query, remove, update } from '@/services/localDb';
+import { useSupabaseQuery } from '@/hooks/useSupabaseQuery';
+import { supabase } from '@/services/supabaseClient';
 import { DATE_FORMATS, formatLocalDate } from '@/utils/date';
 
 export const route = { path: '/orders', layout: 'owner', access: 'public' };
@@ -24,15 +24,21 @@ function orderDatePart(date = new Date()) {
 
 async function nextOrderCode(platformId, platformName) {
   const prefix = `${platformShortCode(platformName)}${orderDatePart()}`;
-  const existing = await query(
-    'SELECT code FROM orders WHERE platform_id = ? AND code LIKE ?',
-    [platformId, `${prefix}%`]
-  );
-  const sequence = existing.reduce((highest, row) => {
+  const { data: existing, error } = await supabase
+    .from('orders')
+    .select('code')
+    .eq('platform_id', platformId)
+    .like('code', `${prefix}%`);
+  if (error) throw error;
+  const sequence = (existing || []).reduce((highest, row) => {
     const suffix = String(row.code || '').slice(prefix.length);
     return /^\d{4}$/.test(suffix) ? Math.max(highest, Number(suffix)) : highest;
   }, 0) + 1;
   return `${prefix}${String(sequence).padStart(4, '0')}`;
+}
+
+function flattenOrder(row) {
+  return { ...row, platform_name: row.platforms?.name, pickup_name: row.places?.name };
 }
 
 export default function Orders() {
@@ -44,22 +50,27 @@ export default function Orders() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [form, setForm] = useState({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', payment_type: 'PREPAID', cod_amount: '', notes: '' });
-  const { data: orders, loading, error, run } = useLocalQuery(
-    `SELECT o.*, p.name AS platform_name, pl.name AS pickup_name
-     FROM orders o
-     LEFT JOIN platforms p ON p.id = o.platform_id
-     LEFT JOIN places pl ON pl.id = o.pickup_place_id
-     ORDER BY o.created_at DESC`,
-    [],
+  const { data: rawOrders, loading, error, run } = useSupabaseQuery(
+    () => supabase
+      .from('orders')
+      .select('*, platforms(name), places(name)')
+      .order('created_at', { ascending: false }),
     []
   );
-  const { data: platforms } = useLocalQuery('SELECT id, name FROM platforms WHERE active = 1 ORDER BY name', [], []);
-  const { data: places } = useLocalQuery('SELECT id, name, type, address, latitude, longitude, platform_id FROM places ORDER BY name', [], []);
+  const orders = useMemo(() => (rawOrders ?? []).map(flattenOrder), [rawOrders]);
+  const { data: platforms } = useSupabaseQuery(
+    () => supabase.from('platforms').select('id, name').eq('active', true).order('name'),
+    []
+  );
+  const { data: places } = useSupabaseQuery(
+    () => supabase.from('places').select('id, name, type, address, latitude, longitude, platform_id').order('name'),
+    []
+  );
   const availablePlaces = useMemo(() => (places ?? []).filter(place => !place.platform_id || place.platform_id === form.platform_id), [places, form.platform_id]);
 
   const rows = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return (orders ?? [])
+    return orders
       .filter(order => !needle || `${order.code} ${order.platform_name ?? ''} ${order.drop_address ?? ''}`.toLowerCase().includes(needle))
       .filter(order => status === 'All' || order.status === status)
       .sort((a, b) => sort === 'earning'
@@ -111,22 +122,24 @@ export default function Orders() {
         notes: form.notes.trim()
       };
       if (editingOrder) {
-        await update('orders', editingOrder.id, values);
+        const { error: updateError } = await supabase.from('orders').update({ ...values, updated_at: new Date().toISOString() }).eq('id', editingOrder.id);
+        if (updateError) throw updateError;
       } else {
         const code = await nextOrderCode(platform.id, platform.name);
-        await insert('orders', {
+        const { error: insertError } = await supabase.from('orders').insert({
           ...values,
           code,
           status: 'Allocated',
           distance_km: 0,
           duration_min: 0,
           accepted_at: new Date().toISOString()
-        }, 'ord');
+        });
+        if (insertError) throw insertError;
       }
       setForm({ platform_id: 'platform_swiggy', pickup_place_id: '', drop_address: '', earning: '', payment_type: 'PREPAID', cod_amount: '', notes: '' });
       setEditingOrder(null);
       setOpen(false);
-      setMessage(editingOrder ? `Order ${editingOrder.code} updated.` : 'Order saved locally in SQLite.');
+      setMessage(editingOrder ? `Order ${editingOrder.code} updated.` : 'Order saved.');
       await run();
     } catch (err) {
       setMessage(err.message || 'Could not save the order.');
@@ -136,13 +149,17 @@ export default function Orders() {
   }
 
   async function deleteOrder(order) {
-    if (!window.confirm(`Delete order ${order.code}? This removes it from the local database.`)) return;
-    await remove('orders', order.id);
+    if (!window.confirm(`Delete order ${order.code}? This removes it from the database.`)) return;
+    const { error: deleteError } = await supabase.from('orders').delete().eq('id', order.id);
+    if (deleteError) {
+      setMessage(deleteError.message || 'Could not delete the order.');
+      return;
+    }
     setMessage(`Order ${order.code} deleted.`);
     await run();
   }
 
-  const statusCounts = useMemo(() => STATUSES.reduce((counts, value) => ({ ...counts, [value]: (orders ?? []).filter(order => order.status === value).length }), {}), [orders]);
+  const statusCounts = useMemo(() => STATUSES.reduce((counts, value) => ({ ...counts, [value]: orders.filter(order => order.status === value).length }), {}), [orders]);
 
   return (
     <div className="space-y-5">
@@ -158,7 +175,7 @@ export default function Orders() {
       </header>
 
       <div className="grid gap-2 overflow-x-auto pb-1 sm:grid-cols-4">
-        {['All', 'Allocated', 'Picked Up', 'Delivered'].map(value => <button key={value} onClick={() => setStatus(value)} className={`min-w-32 rounded-xl border px-3 py-2.5 text-left transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${status === value ? 'border-primary bg-primary/10' : 'border-border bg-card'}`}><span className="block text-xs font-semibold text-muted-foreground">{value}</span><strong className="text-xl tabular-nums">{value === 'All' ? (orders ?? []).length : statusCounts[value] || 0}</strong></button>)}
+        {['All', 'Allocated', 'Picked Up', 'Delivered'].map(value => <button key={value} onClick={() => setStatus(value)} className={`min-w-32 rounded-xl border px-3 py-2.5 text-left transition hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${status === value ? 'border-primary bg-primary/10' : 'border-border bg-card'}`}><span className="block text-xs font-semibold text-muted-foreground">{value}</span><strong className="text-xl tabular-nums">{value === 'All' ? orders.length : statusCounts[value] || 0}</strong></button>)}
       </div>
 
       {open && <form onSubmit={saveOrder} className="grid gap-4 rounded-3xl border border-border bg-card p-5 md:grid-cols-2">
@@ -219,5 +236,5 @@ function ErrorState({ message, retry }) {
 }
 
 function EmptyState({ onAdd }) {
-  return <div className="grid justify-items-center rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="PackageOpen" className="mb-3 text-muted-foreground" /><p className="mb-4 max-w-md text-sm text-muted-foreground">Your local order ledger is empty. Add the first accepted delivery to start tracking the shift.</p><button onClick={onAdd} className="rounded-xl bg-primary px-4 py-2 font-bold text-primary-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Add first order</button></div>;
+  return <div className="grid justify-items-center rounded-3xl border border-dashed border-border p-10 text-center"><ApperIcon name="PackageOpen" className="mb-3 text-muted-foreground" /><p className="mb-4 max-w-md text-sm text-muted-foreground">Your order ledger is empty. Add the first accepted delivery to start tracking the shift.</p><button onClick={onAdd} className="rounded-xl bg-primary px-4 py-2 font-bold text-primary-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Add first order</button></div>;
 }
