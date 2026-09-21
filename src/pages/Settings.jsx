@@ -1,12 +1,33 @@
 import { useEffect, useState } from 'react';
 import ApperIcon from '@/components/ApperIcon';
-import { downloadDatabase, exportDatabase, importDatabase } from '@/services/localDb';
+import { supabase } from '@/services/supabaseClient';
 
 export const route = { path: '/settings', layout: 'owner', access: 'public' };
 export const nav = { icon: 'Settings2', label: 'Settings & backup', section: 'System', order: 7 };
 
 const SLICE_KEY = 'rideros.slice.account';
 const DRIVE_KEY = 'rideros.drive.client';
+const EXPORT_TABLES = ['platforms', 'places', 'riders', 'orders', 'trips', 'trip_orders', 'gps_events', 'goals', 'payments'];
+
+async function exportSupabaseData() {
+  const result = {};
+  for (const table of EXPORT_TABLES) {
+    const { data, error } = await supabase.from(table).select('*');
+    if (error) throw error;
+    result[table] = data ?? [];
+  }
+  return result;
+}
+
+function downloadJson(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function Settings() {
   const [sliceAccount, setSliceAccount] = useState({ vpa: '', payee: '' });
@@ -35,26 +56,11 @@ export default function Settings() {
   async function backup() {
     setBusy(true);
     try {
-      downloadDatabase(await exportDatabase());
-      setMessage('SQLite backup downloaded. Keep it somewhere separate from the device.');
+      const data = await exportSupabaseData();
+      downloadJson(data, `rideros-${new Date().toISOString().replaceAll(':', '-')}.json`);
+      setMessage('Data export downloaded. Your live database stays on Supabase — this file is just a point-in-time copy.');
     } catch (err) {
-      setMessage(err.message || 'Backup failed.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function restore(event) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    if (!window.confirm('Restore this SQLite file? The current local database will be replaced.')) return;
-    setBusy(true);
-    try {
-      await importDatabase(file);
-      setMessage('SQLite database restored. Reload the app to refresh every screen.');
-    } catch (err) {
-      setMessage(err.message || 'Restore failed.');
+      setMessage(err.message || 'Export failed.');
     } finally {
       setBusy(false);
     }
@@ -103,13 +109,14 @@ export default function Settings() {
     }
     setBusy(true);
     try {
-      const bytes = await exportDatabase();
-      const metadata = { name: `rideros-${new Date().toISOString().replaceAll(':', '-')}.sqlite`, parents: ['appDataFolder'] };
+      const data = await exportSupabaseData();
+      const json = JSON.stringify(data, null, 2);
+      const metadata = { name: `rideros-${new Date().toISOString().replaceAll(':', '-')}.json`, parents: ['appDataFolder'] };
       const boundary = `rideros_${crypto.randomUUID()}`;
       const body = new Blob([
         `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`,
-        `--${boundary}\r\nContent-Type: application/x-sqlite3\r\n\r\n`,
-        bytes,
+        `--${boundary}\r\nContent-Type: application/json\r\n\r\n`,
+        json,
         `\r\n--${boundary}--`
       ], { type: `multipart/related; boundary=${boundary}` });
       const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,createdTime', {
@@ -118,7 +125,7 @@ export default function Settings() {
         body
       });
       if (!response.ok) throw new Error('Google Drive rejected the backup upload. Reconnect and try again.');
-      setMessage('SQLite backup uploaded to your private Google Drive app-data folder.');
+      setMessage('Data export uploaded to your private Google Drive app-data folder.');
     } catch (err) {
       setMessage(err.message || 'Google Drive backup failed.');
     } finally {
@@ -126,12 +133,12 @@ export default function Settings() {
     }
   }
 
-  return <div className="mx-auto max-w-5xl space-y-6"><header><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Private device setup</p><h1 className="font-heading text-5xl font-bold">Settings & backup</h1><p className="mt-2 text-muted-foreground">Your working database is SQLite on this device. Cloud backup is optional.</p></header>
+  return <div className="mx-auto max-w-5xl space-y-6"><header><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Account & data setup</p><h1 className="font-heading text-5xl font-bold">Settings & backup</h1><p className="mt-2 text-muted-foreground">Your working database is hosted on Supabase and updates live. Export a JSON copy any time for your own records.</p></header>
     {message && <div role="status" className="rounded-xl bg-muted p-3 text-sm">{message}</div>}
     <section className="rounded-3xl border border-border bg-card p-6"><div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-secondary text-secondary-foreground"><ApperIcon name="WalletCards" /></span><div><h2 className="font-heading text-3xl font-bold">Slice account details</h2><p className="text-sm text-muted-foreground">Store the Slice-linked UPI ID that riders will use to collect COD payments.</p></div></div><form onSubmit={saveSliceAccount} className="mt-5 grid gap-4 md:grid-cols-2"><label className="text-sm font-semibold">Slice UPI ID / VPA<input required value={sliceAccount.vpa} onChange={event => setSliceAccount({ ...sliceAccount, vpa: event.target.value })} placeholder="yourname@upi" className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label><label className="text-sm font-semibold">Account / payee name<input value={sliceAccount.payee} onChange={event => setSliceAccount({ ...sliceAccount, payee: event.target.value })} placeholder="Your business name" className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label><div className="md:col-span-2"><button className="rounded-xl bg-primary px-5 py-3 font-bold text-primary-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Save Slice details</button><p className="mt-3 text-xs leading-relaxed text-muted-foreground">The app creates an amount-specific UPI QR locally when a COD order is opened in Live Run. It does not call the Slice API or claim to verify bank settlement automatically. The rider marks the amount received only after confirming the payment in the Slice/banking app.</p></div></form></section>
-    <section className="grid gap-6 lg:grid-cols-2"><div className="rounded-3xl border border-border bg-card p-6"><div className="mb-5 flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-secondary text-secondary-foreground"><ApperIcon name="HardDrive" /></span><div><h2 className="font-heading text-3xl font-bold">SQLite backup</h2><p className="text-sm text-muted-foreground">WhatsApp-style local-first recovery: the device is primary, backup is secondary.</p></div></div><div className="grid gap-3 sm:grid-cols-2"><button disabled={busy} onClick={backup} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50"><ApperIcon name="Download" /> Export SQLite</button><label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-secondary px-4 py-3 font-bold text-secondary-foreground hover:bg-accent"> <ApperIcon name="Upload" /> Restore SQLite<input type="file" accept=".sqlite,.db,application/x-sqlite3" onChange={restore} className="sr-only" /></label></div><p className="mt-4 text-xs leading-relaxed text-muted-foreground">The exported file contains your local orders, trips, GPS events, goals, payment records and configuration data. Protect it like business data.</p></div>
-      <div className="rounded-3xl border border-border bg-card p-6"><div className="mb-5 flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-secondary text-secondary-foreground"><ApperIcon name="Cloud" /></span><div><h2 className="font-heading text-3xl font-bold">Optional Google Drive backup</h2><p className="text-sm text-muted-foreground">Use your own Google Drive. The app will not upload anything until you connect it.</p></div></div><label className="text-sm font-semibold">Google OAuth web client ID<input value={driveClientId} onChange={event => setDriveClientId(event.target.value)} placeholder="xxxxx.apps.googleusercontent.com" className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label><div className="mt-3 grid gap-2 sm:grid-cols-2"><button onClick={saveDriveClient} className="rounded-xl bg-secondary px-4 py-3 font-bold text-secondary-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Save client ID</button><button disabled={busy || !driveClientId} onClick={connectDrive} className="rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50">{driveToken ? 'Drive connected' : 'Connect Drive'}</button></div><button disabled={busy || !driveToken} onClick={backupToDrive} className="mt-2 w-full rounded-xl bg-secondary px-4 py-3 font-bold text-secondary-foreground disabled:opacity-50"><ApperIcon name="CloudUpload" /> Backup SQLite to Drive</button><p className="mt-3 text-xs leading-relaxed text-muted-foreground">The app requests only Google Drive <span className="font-semibold">appDataFolder</span> access, uploads the SQLite file privately, and keeps the access token only in memory. Configure the OAuth client's authorized web origin to match this app.</p></div></section>
-    <section className="rounded-3xl border border-border bg-card p-6"><h2 className="font-heading text-3xl font-bold">Privacy & device safety</h2><div className="mt-5 grid gap-3 md:grid-cols-3"><Setting icon="MapPin" title="GPS" text="Only capture when a delivery milestone is advanced." /><Setting icon="Database" title="SQLite" text="The operational database stays on this device until you export or back it up." /><Setting icon="ShieldCheck" title="No OTP" text="This private build does not depend on SMS OTP or delivery-platform APIs." /></div></section>
+    <section className="grid gap-6 lg:grid-cols-2"><div className="rounded-3xl border border-border bg-card p-6"><div className="mb-5 flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-secondary text-secondary-foreground"><ApperIcon name="HardDrive" /></span><div><h2 className="font-heading text-3xl font-bold">Data export</h2><p className="text-sm text-muted-foreground">Supabase is the source of truth. This export is a point-in-time JSON copy for your own records — it is not needed for the app to keep working.</p></div></div><div className="grid gap-3 sm:grid-cols-2"><button disabled={busy} onClick={backup} className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50"><ApperIcon name="Download" /> Export data (JSON)</button></div><p className="mt-4 text-xs leading-relaxed text-muted-foreground">The exported file contains your platforms, places, orders, trips, GPS events, goals and payment records as they currently stand in Supabase. Protect it like business data.</p></div>
+      <div className="rounded-3xl border border-border bg-card p-6"><div className="mb-5 flex items-start gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-secondary text-secondary-foreground"><ApperIcon name="Cloud" /></span><div><h2 className="font-heading text-3xl font-bold">Optional Google Drive backup</h2><p className="text-sm text-muted-foreground">Use your own Google Drive. The app will not upload anything until you connect it.</p></div></div><label className="text-sm font-semibold">Google OAuth web client ID<input value={driveClientId} onChange={event => setDriveClientId(event.target.value)} placeholder="xxxxx.apps.googleusercontent.com" className="mt-2 w-full rounded-xl border border-input bg-background px-3 py-3 font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label><div className="mt-3 grid gap-2 sm:grid-cols-2"><button onClick={saveDriveClient} className="rounded-xl bg-secondary px-4 py-3 font-bold text-secondary-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Save client ID</button><button disabled={busy || !driveClientId} onClick={connectDrive} className="rounded-xl bg-primary px-4 py-3 font-bold text-primary-foreground disabled:opacity-50">{driveToken ? 'Drive connected' : 'Connect Drive'}</button></div><button disabled={busy || !driveToken} onClick={backupToDrive} className="mt-2 w-full rounded-xl bg-secondary px-4 py-3 font-bold text-secondary-foreground disabled:opacity-50"><ApperIcon name="CloudUpload" /> Backup data to Drive</button><p className="mt-3 text-xs leading-relaxed text-muted-foreground">The app requests only Google Drive <span className="font-semibold">appDataFolder</span> access, uploads the JSON export privately, and keeps the access token only in memory. Configure the OAuth client's authorized web origin to match this app.</p></div></section>
+    <section className="rounded-3xl border border-border bg-card p-6"><h2 className="font-heading text-3xl font-bold">Privacy & data safety</h2><div className="mt-5 grid gap-3 md:grid-cols-3"><Setting icon="MapPin" title="GPS" text="Only capture when a delivery milestone is advanced." /><Setting icon="Database" title="Supabase" text="Your operational data lives in your Supabase project, protected by row-level security and your sign-in." /><Setting icon="ShieldCheck" title="No OTP" text="This private build does not depend on SMS OTP or delivery-platform APIs." /></div></section>
   </div>;
 }
 

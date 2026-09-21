@@ -2,15 +2,16 @@ import { useMemo } from 'react';
 import { CircleMarker, MapContainer, TileLayer, Tooltip } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import ApperIcon from '@/components/ApperIcon';
-import { useLocalQuery } from '@/hooks/useLocalTable';
+import { useSupabaseQuery } from '@/hooks/useSupabaseQuery';
+import { supabase } from '@/services/supabaseClient';
 
 export const route = { path: '/insights', layout: 'owner', access: 'public' };
 export const nav = { icon: 'ChartNoAxesCombined', label: 'Insights', section: 'Operations', order: 6 };
 
 export default function Insights() {
-  const { data: orders, loading: ordersLoading, error: ordersError, run: reloadOrders } = useLocalQuery('SELECT * FROM orders ORDER BY created_at DESC', [], []);
-  const { data: events, loading: eventsLoading, error: eventsError, run: reloadEvents } = useLocalQuery('SELECT * FROM gps_events ORDER BY captured_at DESC', [], []);
-  const { data: places, loading: placesLoading, error: placesError, run: reloadPlaces } = useLocalQuery('SELECT * FROM places ORDER BY name', [], []);
+  const { data: orders, loading: ordersLoading, error: ordersError, run: reloadOrders } = useSupabaseQuery(() => supabase.from('orders').select('*').order('created_at', { ascending: false }), []);
+  const { data: events, loading: eventsLoading, error: eventsError, run: reloadEvents } = useSupabaseQuery(() => supabase.from('gps_events').select('*').order('captured_at', { ascending: false }), []);
+  const { data: places, loading: placesLoading, error: placesError, run: reloadPlaces } = useSupabaseQuery(() => supabase.from('places').select('*').order('name'), []);
   const delivered = (orders ?? []).filter(order => order.status === 'Delivered');
   const earnings = delivered.reduce((sum, order) => sum + Number(order.earning || 0), 0);
   const distance = delivered.reduce((sum, order) => sum + Number(order.distance_km || 0), 0);
@@ -48,7 +49,7 @@ export default function Insights() {
   const maxPlatform = Math.max(1, ...Object.values(platformTotals));
   const error = ordersError || eventsError || placesError;
 
-  return <div className="space-y-6"><header><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Your operational memory</p><h1 className="font-heading text-5xl font-bold">Shift intelligence</h1><p className="mt-2 text-muted-foreground">Every metric below is calculated from your local SQLite records.</p></header>
+  return <div className="space-y-6"><header><p className="mb-2 text-xs font-bold uppercase tracking-[.18em] text-primary">Your operational memory</p><h1 className="font-heading text-5xl font-bold">Shift intelligence</h1><p className="mt-2 text-muted-foreground">Every metric below is calculated live from your Supabase records.</p></header>
     {ordersLoading || eventsLoading || placesLoading ? <Loading /> : error ? <div className="rounded-2xl bg-destructive/10 p-5 text-destructive">{error.message}<button onClick={() => { reloadOrders(); reloadEvents(); reloadPlaces(); }} className="ml-3 underline">Retry</button></div> : <>
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Delivered earnings" value={`₹${earnings.toFixed(0)}`} icon="IndianRupee" /><Stat label="Distance recorded" value={`${distance.toFixed(1)} km`} icon="Route" /><Stat label="Avg delivery time" value={formatMinutes(avgDelivery)} icon="Clock" /><Stat label="Earning / km" value={`₹${(distance ? earnings / distance : 0).toFixed(1)}`} icon="TrendingUp" /></section>
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="Pickup travel" value={formatMinutes(pickupTravel)} icon="Navigation" /><Stat label="Pickup wait" value={formatMinutes(pickupWait)} icon="Timer" /><Stat label="Customer travel" value={formatMinutes(customerTravel)} icon="Bike" /><Stat label="Customer handoff" value={formatMinutes(customerWait)} icon="Handshake" /></section>
